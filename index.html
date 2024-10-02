@@ -140,7 +140,7 @@
       if (reticle.visible) {
         const loader = new THREE.GLTFLoader()
         const gltf = await loader.loadAsync('seedsan.vrm')
-        alert('loaded gltf');
+        //alert('loaded gltf');
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
         const vrm = await THREE.VRM.from(gltf)
 
