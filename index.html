@@ -135,25 +135,25 @@
       renderer.render(scene, camera)
     }
 
-    // VRMモデルの表示
-    // async function onSelect() {
-    //   if (reticle.visible) {
-    //     const loader = new THREE.GLTFLoader()
-    //     const gltf = await loader.loadAsync('/models/AliciaSolid.vrm')
-    //     THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
-    //     const vrm = await THREE.VRM.from(gltf)
+    //VRMモデルの表示
+    async function onSelect() {
+      if (reticle.visible) {
+        const loader = new THREE.GLTFLoader()
+        const gltf = await loader.loadAsync('seedsan.vrm')
+        THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
+        const vrm = await THREE.VRM.from(gltf)
 
-    //     reticle.matrix.decompose(
-    //       vrm.scene.position,
-    //       vrm.scene.quaternion,
-    //       vrm.scene.scale,
-    //     )
-    //     vrm.scene.rotation.y = camera.rotation.y + Math.PI
-    //     vrm.lookAt.target = camera
-    //     scene.add(vrm.scene)
-    //     reticle.visible = false
-    //   }
-    // }
+        reticle.matrix.decompose(
+          vrm.scene.position,
+          vrm.scene.quaternion,
+          vrm.scene.scale,
+        )
+        vrm.scene.rotation.y = camera.rotation.y + Math.PI
+        vrm.lookAt.target = camera
+        scene.add(vrm.scene)
+        reticle.visible = false
+      }
+    }
   </script>
 </body>
 </html>
