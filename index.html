@@ -76,7 +76,7 @@
 
     // controllerの設定
     const controller = renderer.xr.getController(0)
-    //controller.addEventListener('select', onSelect)
+    controller.addEventListener('select', onSelect)
     scene.add(controller)
 
     // ヒットテスト用のreticleを用意
