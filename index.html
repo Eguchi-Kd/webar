@@ -135,7 +135,6 @@
     }
 
     //VRMモデルの表示
-     const loader = new GLTFLoader();
      async function onSelect() {
        if (reticle.visible) {
          // const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
@@ -149,30 +148,31 @@
          // )
          // scene.add(cube);
 
-        //const loader = new GLTFLoader();
-        loader.load(
-          'AliciaSolid.vrm',
-          (gltf) => {
-            VRM.from(gltf).then(vrm => {
-              vrm.position.setFromMatrixPosition(reticle.matrix);
-              scene.add(vrm.scene);
-            });
-          }
-        );
-        
-        // const gltf = await loader.loadAsync('AliciaSolid.vrm')
-        // THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
-        // //alert(gltf);
-        // const vrm = await THREE.VRM.from(gltf)
+        // const loader = new GLTFLoader();
+        // loader.load(
+        //   'AliciaSolid.vrm',
+        //   (gltf) => {
+        //     VRM.from(gltf).then(vrm => {
+        //       //vrm.position.setFromMatrixPosition(reticle.matrix);
+        //       scene.add(vrm.scene);
+        //     });
+        //   }
+        // );
+        const loader = new GLTFLoader();
+        const gltf = await loader.loadAsync('AliciaSolid.vrm')
+        VRMUtils.removeUnnecessaryJoints(gltf.scene)
+        //THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
+        //alert(gltf);
+        const vrm = await THREE.VRM.from(gltf)
 
-        // reticle.matrix.decompose(
-        //   vrm.scene.position,
-        //   vrm.scene.quaternion,
-        //   vrm.scene.scale,
-        // )
-        //vrm.scene.rotation.y = camera.rotation.y + Math.PI
-        //vrm.lookAt.target = camera
-        //scene.add(vrm.scene)
+        reticle.matrix.decompose(
+          vrm.scene.position,
+          vrm.scene.quaternion,
+          vrm.scene.scale,
+        )
+        vrm.scene.rotation.y = camera.rotation.y + Math.PI
+        vrm.lookAt.target = camera
+        scene.add(vrm.scene)
         reticle.visible = false;
       }
     }
