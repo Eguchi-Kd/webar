@@ -149,7 +149,7 @@
          // )
          // scene.add(cube);
 
-         //const loader = new GLTFLoader();
+         const loader = new GLTFLoader();
         loader.load(
           'AliciaSolid.vrm',
           (gltf) => {
@@ -170,9 +170,9 @@
         //   vrm.scene.quaternion,
         //   vrm.scene.scale,
         // )
-        vrm.scene.rotation.y = camera.rotation.y + Math.PI
-        vrm.lookAt.target = camera
-        scene.add(vrm.scene)
+        //vrm.scene.rotation.y = camera.rotation.y + Math.PI
+        //vrm.lookAt.target = camera
+        //scene.add(vrm.scene)
         reticle.visible = false;
       }
     }
