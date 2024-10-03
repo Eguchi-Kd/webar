@@ -143,9 +143,9 @@
 
          const cube = new THREE.Mesh(geometry, material);
          reticle.matrix.decompose(
-           cube.scene.position,
-           cube.scene.quaternion,
-           cube.scene.scale,
+           cube.position,
+           cube.quaternion,
+           cube.scale,
          )
          scene.add(cube);
          
