@@ -143,16 +143,17 @@
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
         const vrm = await THREE.VRM.from(gltf)
 
+        alert('OK1');
         reticle.matrix.decompose(
           vrm.scene.position,
           vrm.scene.quaternion,
           vrm.scene.scale,
         )
+        alert('OK2');
         vrm.scene.rotation.y = camera.rotation.y + Math.PI
         vrm.lookAt.target = camera
         scene.add(vrm.scene)
         reticle.visible = false
-        alert('OK')
       }
     }
   </script>
