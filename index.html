@@ -136,31 +136,42 @@
     }
 
     //VRMモデルの表示
-    async function onSelect() {
-      if (reticle.visible) {
-        const loader = new THREE.GLTFLoader();
-        loader.load(
-          'AliciaSolid.vrm',
-          (gltf) => {
-            THREE.VRM.from(gltf).then((vrm) => {
-              scene.add(vrm.scene);
-            });
-          }
-        );
+     async function onSelect() {
+       if (reticle.visible) {
+         const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+         const material = new THREE.MeshBasicMaterial({color:0x00ff00});
+
+         const cube = new THREE.Mesh(geometry, material);
+         reticle.matrix.decompose(
+           cube.scene.position,
+           cube.scene.quaternion,
+           cube.scene.scale,
+         )
+         scene.add(cube);
+         
+    //     loader.load(
+    //       'AliciaSolid.vrm',
+    //       (gltf) => {
+    //         THREE.VRM.from(gltf).then((vrm) => {
+    //           scene.add(vrm.scene);
+    //         });
+    //       }
+    //     );
+        
         // const gltf = await loader.loadAsync('AliciaSolid.vrm')
         // THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
         // //alert(gltf);
         // const vrm = await THREE.VRM.from(gltf)
 
-        reticle.matrix.decompose(
-          vrm.scene.position,
-          vrm.scene.quaternion,
-          vrm.scene.scale,
-        )
-        vrm.scene.rotation.y = camera.rotation.y + Math.PI
-        vrm.lookAt.target = camera
-        //scene.add(vrm.scene)
-        reticle.visible = false
+        // reticle.matrix.decompose(
+        //   vrm.scene.position,
+        //   vrm.scene.quaternion,
+        //   vrm.scene.scale,
+        // )
+        // vrm.scene.rotation.y = camera.rotation.y + Math.PI
+        // vrm.lookAt.target = camera
+        // scene.add(vrm.scene)
+        reticle.visible = false;
       }
     }
   </script>
