@@ -162,7 +162,7 @@
         const gltf = await loader.loadAsync('AliciaSolid.vrm')
         //VRMUtils.removeUnnecessaryJoints(gltf.scene)
         //alert(gltf);
-        const vrm = await THREE.VRM.from(gltf)
+        const vrm = await VRM.from(gltf)
 
         reticle.matrix.decompose(
           vrm.scene.position,
