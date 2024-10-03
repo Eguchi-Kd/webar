@@ -139,7 +139,7 @@
     async function onSelect() {
       if (reticle.visible) {
         const loader = new THREE.GLTFLoader()
-        const gltf = await loader.loadAsync('seedsan.vrm')
+        const gltf = await loader.loadAsync('')
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
         alert('OK');
         const vrm = await THREE.VRM.from(gltf)
