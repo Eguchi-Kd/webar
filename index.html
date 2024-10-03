@@ -35,8 +35,7 @@
   <script>
     // WebARサポートの判定
     (async () => {
-      const isArSupported =
-        navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'))
+      const isArSupported = navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'))
 
       if (isArSupported) {
         // WebARがサポートされている場合に、ボタンなどを表示
@@ -136,6 +135,7 @@
     }
 
     //VRMモデルの表示
+     const loader = new GLTFLoader();
      async function onSelect() {
        if (reticle.visible) {
          // const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
@@ -149,7 +149,7 @@
          // )
          // scene.add(cube);
 
-        const loader = new PromiseGLTFLoader();
+        //const loader = new GLTFLoader();
         loader.load(
           'AliciaSolid.vrm',
           (gltf) => {
