@@ -30,10 +30,9 @@
   <!-- GLTFLoader for loading VRM models -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <!-- VRM libraries -->
-  
+  <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@1.0.0"></script>
 
-  <script type="module">
-    import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+  <script>
     // WebARサポートの判定
     (async () => {
       const isArSupported = navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'))
