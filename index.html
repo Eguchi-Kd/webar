@@ -137,17 +137,6 @@
     //VRMモデルの表示
      async function onSelect() {
        if (reticle.visible) {
-         // const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-         // const material = new THREE.MeshBasicMaterial({color:0x00ff00});
-
-         // const cube = new THREE.Mesh(geometry, material);
-         // reticle.matrix.decompose(
-         //   cube.position,
-         //   cube.quaternion,
-         //   cube.scale,
-         // )
-         // scene.add(cube);
-
         // const loader = new GLTFLoader();
         // loader.load(
         //   'AliciaSolid.vrm',
@@ -158,10 +147,10 @@
         //     });
         //   }
         // );
+         
         const loader = new THREE.GLTFLoader();
-        const gltf = await loader.loadAsync('./AliciaSolid.vrm')// ./   エラー起こすところだけ別にしてtypescriptで書く?
+        const gltf = await loader.loadAsync('./AliciaSolid.vrm')
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
-        //alert(gltf);
         const vrm = await THREE.VRM.from(gltf)
 
         reticle.matrix.decompose(
