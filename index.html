@@ -160,9 +160,9 @@
         // );
         const loader = new THREE.GLTFLoader();
         const gltf = await loader.loadAsync('./AliciaSolid.vrm')// ./   エラー起こすところだけ別にしてtypescriptで書く?
-        VRMUtils.removeUnnecessaryJoints(gltf.scene)
+        THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
         //alert(gltf);
-        const vrm = await VRM.from(gltf)
+        const vrm = await THREE.VRM.from(gltf)
 
         reticle.matrix.decompose(
           vrm.scene.position,
