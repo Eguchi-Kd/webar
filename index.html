@@ -149,7 +149,7 @@
         // );
          
         const loader = new THREE.GLTFLoader();
-        const gltf = await loader.loadAsync('./AliciaSolid.vrm')
+        const gltf = await loader.loadAsync('./Aorin.vrm')
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
         const vrm = await THREE.VRM.from(gltf)
 
@@ -160,6 +160,7 @@
         )
         vrm.scene.rotation.y = camera.rotation.y + Math.PI
         vrm.lookAt.target = camera
+        vrm.scene.scale.set(0.8, 0.8, 0.8);
         scene.add(vrm.scene)
         reticle.visible = false;
       }
