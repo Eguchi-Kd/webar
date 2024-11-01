@@ -102,17 +102,24 @@
         const gltf = await loader.loadAsync('./AliciaSolid.vrm');
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
         
-        // Dispose of previous model if it exists
-        if (vrm) {
-          scene.remove(vrm.scene);
-          vrm.scene.traverse((object) => {
-            if (object.isMesh) {
-              object.geometry.dispose();
-              object.material.dispose();
-            }
-          });
-          vrm = null;
+// Dispose of previous model if it exists
+if (vrm) {
+  scene.remove(vrm.scene);
+  vrm.scene.traverse((object) => {
+    if (object.isMesh) {
+      if (object.geometry) object.geometry.dispose();
+      if (object.material) {
+        if (Array.isArray(object.material)) {
+          object.material.forEach(mat => mat.dispose());
+        } else {
+          object.material.dispose();
         }
+      }
+    }
+  });
+  vrm = null;
+}
+
 
         // Load and position new VRM model
         vrm = await THREE.VRM.from(gltf);
