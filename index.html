@@ -135,14 +135,14 @@ if (vrm) {
       }
     }
 
-    function onScreenDoubleTap() {
-      renderer.domElement.toDataURL('image/png', (dataUrl) => {
-        const link = document.createElement('a');
-        link.href = dataUrl;
-        link.download = 'screenshot.png';
-        link.click();
-      });
-    }
+function onScreenDoubleTap() {
+  const dataUrl = renderer.domElement.toDataURL('image/png');
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = 'screenshot.png';
+  link.click();
+}
+
 
     // Triple tap detection
     document.addEventListener('touchend', (event) => {
@@ -154,6 +154,7 @@ if (vrm) {
 
         // Triple tap detected
         if (tapCount === 2) {
+          console.log("Double tap detected");
           onScreenDoubleTap();
         }
       } else if(tapCount === 3){
