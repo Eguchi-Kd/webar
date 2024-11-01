@@ -151,7 +151,7 @@
     async function onSelect() {
       if (reticle.visible) {
         const loader = new THREE.GLTFLoader();
-        const gltf = await loader.loadAsync('./AliciaSolid.vrm');
+        const gltf = await loader.loadAsync('./Aorin.vrm');
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
         vrmModel = await THREE.VRM.from(gltf);
 
