@@ -26,6 +26,7 @@
       z-index: 1000;
     }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
   <div id="overlay"></div>
@@ -136,11 +137,16 @@ if (vrm) {
     }
 
 function onScreenDoubleTap() {
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-  const link = document.createElement('a');
-  link.href = dataUrl;
-  link.download = 'screenshot.png';
-  link.click();
+  html2canvas(document.body).then(canvas => {
+    // 画像をデータURLとして取得
+    const dataUrl = canvas.toDataURL('image/png');
+    
+    // ダウンロードリンクを作成
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = 'screenshot.png';
+    link.click();
+  });
 }
 
 
@@ -156,12 +162,12 @@ function onScreenDoubleTap() {
         if (tapCount === 2) {
           console.log("Double tap detected");
           onScreenDoubleTap();
-        }
+          tapCount = 0;
       } else if(tapCount === 3){
           onTripleTap();
           tapCount = 0;
       }else{
-        tapCount = 1; // Reset count if not a quick sequence
+        tapCount = 0; // Reset count if not a quick sequence
       }
 
       lastTap = currentTime;
