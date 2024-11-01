@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebAR with Triple Tap to Place VRM Model</title>
+  <title>WebAR test</title>
   <style>
     body {
       margin: 0;
@@ -18,15 +18,7 @@
       pointer-events: none;
       z-index: 999;
     }
-    .ar-button {
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 1000;
-    }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
   <div id="overlay"></div>
@@ -40,170 +32,136 @@
   <!-- VRM libraries -->
   <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
 
-  <button id="startArButton" class="ar-button">Start AR</button>
-
   <script>
-    const startArButton = document.getElementById('startArButton');
-    let vrm; // Global reference to the VRM model
-    let lastTap = 0;
-    let tapCount = 0;
+    // WebARサポートの判定
+    (async () => {
+      const isArSupported = navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'))
 
-    // Three.js setup
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.xr.enabled = true;
-    renderer.xr.setReferenceSpaceType('local');
-    document.body.appendChild(renderer.domElement);
+      if (isArSupported) {
+        // WebARがサポートされている場合に、ボタンなどを表示
+        const button = document.createElement('button')
+        button.innerText = 'Start AR'
+        button.style.position = 'absolute'
+        button.style.bottom = '20px'
+        button.style.left = '50%'
+        button.style.transform = 'translateX(-50%)'
+        button.style.zIndex = '1000'
+        document.body.appendChild(button)
 
-    // Add light to the scene
-    const light = new THREE.DirectionalLight(0xffffff);
-    light.position.set(1, 1, 1).normalize();
-    scene.add(light);
+        button.addEventListener('click', arButtonClick)
+      } else {
+        alert('WebAR is not supported on this device')
+      }
+    })()
 
-    // Controller setup
-    const controller = renderer.xr.getController(0);
-    scene.add(controller);
+    // Three.js の準備
+    const scene = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(
+      70,
+      window.innerWidth / window.innerHeight,
+      0.01,
+      20
+    )
+    const light = new THREE.DirectionalLight(0xffffff)
+    light.position.set(1, 1, 1).normalize()
+    scene.add(light)
 
-    // Reticle for hit testing
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    renderer.setSize(window.innerWidth, window.innerHeight)
+    renderer.setPixelRatio(window.devicePixelRatio)
+    document.body.appendChild(renderer.domElement)
+    renderer.xr.enabled = true
+    renderer.xr.setReferenceSpaceType('local')
+
+    // controllerの設定
+    const controller = renderer.xr.getController(0)
+    controller.addEventListener('select', onSelect)
+    scene.add(controller)
+
+    // ヒットテスト用のreticleを用意
     const reticle = new THREE.Mesh(
       new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial()
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
+    )
+    reticle.matrixAutoUpdate = false
+    reticle.visible = false
+    scene.add(reticle)
 
-    let hitTestSource = null;
+    let hitTestSource = null
 
-    // Start AR session
+    // ARセッションの開始
     async function arButtonClick() {
-      startArButton.style.display = 'none'; // Hide start button
-
-      const overlayElem = document.getElementById('overlay');
+      const overlayElem = document.getElementById('overlay')
       const options = {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay'],
         domOverlay: { root: overlayElem }
-      };
-      const xrSession = await navigator.xr.requestSession('immersive-ar', options);
-      await renderer.xr.setSession(xrSession);
-
-      animate();
+      }
+      const xrSession = await navigator.xr.requestSession('immersive-ar', options)
+      await renderer.xr.setSession(xrSession)
+      animate()
     }
 
-    startArButton.addEventListener('click', arButtonClick);
-
-    // VRM model loading and positioning on triple tap
-    async function onTripleTap() {
-      if (reticle.visible) {
-        const loader = new THREE.GLTFLoader();
-        const gltf = await loader.loadAsync('./AliciaSolid.vrm');
-        THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
-        
-// Dispose of previous model if it exists
-if (vrm) {
-  scene.remove(vrm.scene);
-  vrm.scene.traverse((object) => {
-    if (object.isMesh) {
-      if (object.geometry) object.geometry.dispose();
-      if (object.material) {
-        if (Array.isArray(object.material)) {
-          object.material.forEach(mat => mat.dispose());
-        } else {
-          object.material.dispose();
-        }
-      }
-    }
-  });
-  vrm = null;
-}
-
-
-        // Load and position new VRM model
-        vrm = await THREE.VRM.from(gltf);
-        vrm.scene.scale.set(0.6, 0.6, 0.6); // Scale down VRM model
-        reticle.matrix.decompose(
-          vrm.scene.position,
-          vrm.scene.quaternion,
-          vrm.scene.scale
-        );
-        vrm.scene.rotation.y = camera.rotation.y + Math.PI;
-        scene.add(vrm.scene);
-        reticle.visible = false;
-      }
-    }
-
-function onScreenDoubleTap() {
-  html2canvas(document.body).then(canvas => {
-    // 画像をデータURLとして取得
-    const dataUrl = canvas.toDataURL('image/png');
-    
-    // ダウンロードリンクを作成
-    const link = document.createElement('a');
-    link.href = dataUrl;
-    link.download = 'screenshot.png';
-    link.click();
-  });
-}
-
-
-    // Triple tap detection
-    document.addEventListener('touchend', (event) => {
-      const currentTime = new Date().getTime();
-      const tapLength = currentTime - lastTap;
-
-      if (tapLength < 300 && tapLength > 0) {
-        tapCount++;
-      }else{
-        tapCount = 1;
-      }
-
-      lastTap = currentTime;
-
-        // Triple tap detected
-        if (tapCount === 2) {
-          console.log("Double tap detected");
-          onScreenDoubleTap();
-      } else if(tapCount === 3){
-          onTripleTap();
-          tapCount = 0;
-      }
-    
-    });
-
-    // Animation loop
+    // レンダリングのループ
     function animate() {
-      renderer.setAnimationLoop(render);
+      renderer.setAnimationLoop(render)
     }
 
     async function render(timestamp, frame) {
-      if (frame) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
-        const session = renderer.xr.getSession();
-        if (!hitTestSource && referenceSpace && session) {
-          const space = await session.requestReferenceSpace('viewer');
-          hitTestSource = await session.requestHitTestSource({ space });
+      if (!frame) return
 
-          session.addEventListener('end', () => {
-            hitTestSource = null;
-          });
+      const referenceSpace = renderer.xr.getReferenceSpace()
+      const session = renderer.xr.getSession()
+      if (!hitTestSource && referenceSpace && session) {
+        const space = await session.requestReferenceSpace('viewer')
+        hitTestSource = await session.requestHitTestSource({ space })
+
+        session.addEventListener('end', () => {
+          hitTestSource = null
+        })
+      }
+      if (hitTestSource) {
+        const hitTestResults = frame.getHitTestResults(hitTestSource)
+        if (hitTestResults.length && referenceSpace) {
+          const hit = hitTestResults[0]
+          reticle.visible = true
+          reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix)
+        } else {
+          reticle.visible = false
         }
+      }
 
-        if (hitTestSource) {
-          const hitTestResults = frame.getHitTestResults(hitTestSource);
-          if (hitTestResults.length && referenceSpace) {
-            const hit = hitTestResults[0];
-            reticle.visible = true;
-            reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-          } else {
-            reticle.visible = false;
-          }
-        }
+      renderer.render(scene, camera)
+    }
 
-        renderer.render(scene, camera);
+    //VRMモデルの表示
+     async function onSelect() {
+       if (reticle.visible) {
+        // const loader = new GLTFLoader();
+        // loader.load(
+        //   'AliciaSolid.vrm',
+        //   (gltf) => {
+        //     VRM.from(gltf).then(vrm => {
+        //       //vrm.position.setFromMatrixPosition(reticle.matrix);
+        //       scene.add(vrm.scene);
+        //     });
+        //   }
+        // );
+         
+        const loader = new THREE.GLTFLoader();
+        const gltf = await loader.loadAsync('./AliciaSolid.vrm')
+        THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
+        const vrm = await THREE.VRM.from(gltf)
+
+        reticle.matrix.decompose(
+          vrm.scene.position,
+          vrm.scene.quaternion,
+          vrm.scene.scale,
+        )
+        vrm.scene.rotation.y = camera.rotation.y + Math.PI
+        vrm.lookAt.target = camera
+        scene.add(vrm.scene)
+        reticle.visible = false;
       }
     }
   </script>
