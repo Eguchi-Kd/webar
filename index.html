@@ -162,12 +162,12 @@ function onScreenDoubleTap() {
         if (tapCount === 2) {
           console.log("Double tap detected");
           onScreenDoubleTap();
-          tapCount = 0;
+        }
       } else if(tapCount === 3){
           onTripleTap();
           tapCount = 0;
       }else{
-        tapCount = 0; // Reset count if not a quick sequence
+        tapCount = 1; // Reset count if not a quick sequence
       }
 
       lastTap = currentTime;
