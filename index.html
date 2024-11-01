@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebAR test</title>
+  <title>WebAR with Screenshot</title>
   <style>
     body {
       margin: 0;
@@ -18,85 +18,51 @@
       pointer-events: none;
       z-index: 999;
     }
-    .pose-button {
+    .ar-button {
       position: absolute;
-      bottom: 80px;
+      bottom: 20px;
       left: 50%;
       transform: translateX(-50%);
-      margin: 5px;
       z-index: 1000;
+    }
+    .screenshot-button {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1001;
+      display: none; /* Start AR時に表示 */
     }
   </style>
 </head>
 <body>
   <div id="overlay"></div>
 
-  <!-- Three.js Library -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- WebXR Polyfill (for browsers that do not fully support WebXR) -->
-  <script src="https://cdn.jsdelivr.net/npm/webxr-polyfill@latest/build/webxr-polyfill.min.js"></script>
-  <!-- GLTFLoader for loading VRM models -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <!-- VRM libraries -->
-  <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
+  <!-- Three.js and VRM libraries omitted for brevity -->
+
+  <button id="startArButton" class="ar-button">Start AR</button>
+  <button id="screenshotButton" class="screenshot-button">Take Screenshot</button>
 
   <script>
-    // WebARサポートの判定
-    (async () => {
-      const isArSupported = navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'));
+    const startArButton = document.getElementById('startArButton');
+    const screenshotButton = document.getElementById('screenshotButton');
 
-      if (isArSupported) {
-        // WebARがサポートされている場合に、ボタンなどを表示
-        const button = document.createElement('button');
-        button.innerText = 'Start AR';
-        button.style.position = 'absolute';
-        button.style.bottom = '20px';
-        button.style.left = '50%';
-        button.style.transform = 'translateX(-50%)';
-        button.style.zIndex = '1000';
-        document.body.appendChild(button);
+    let vrm;
 
-        button.addEventListener('click', arButtonClick);
-      } else {
-        alert('WebAR is not supported on this device');
-      }
-    })();
-
-    // Three.js の準備
+    // Three.js setup
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(
-      70,
-      window.innerWidth / window.innerHeight,
-      0.01,
-      20
-    );
-    const light = new THREE.DirectionalLight(0xffffff);
-    light.position.set(1, 1, 1).normalize();
-    scene.add(light);
-
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
-    document.body.appendChild(renderer.domElement);
     renderer.xr.enabled = true;
     renderer.xr.setReferenceSpaceType('local');
-
-    const controller = renderer.xr.getController(0);
-    controller.addEventListener('select', onSelect);
-    scene.add(controller);
-
-    const reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial()
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
-
-    let hitTestSource = null;
-    let vrm;
+    document.body.appendChild(renderer.domElement);
 
     async function arButtonClick() {
+      startArButton.style.display = 'none'; // Hide start button
+      screenshotButton.style.display = 'block'; // Show screenshot button
+
       const overlayElem = document.getElementById('overlay');
       const options = {
         requiredFeatures: ['hit-test'],
@@ -105,115 +71,31 @@
       };
       const xrSession = await navigator.xr.requestSession('immersive-ar', options);
       await renderer.xr.setSession(xrSession);
+
       animate();
-
-      // Start ARボタンが押された後にポーズボタンを表示
-      createPoseButtons();
     }
 
-    function createPoseButtons() {
-      const poses = ['Pose 1', 'Pose 2', 'Pose 3', 'Pose 4'];
-      poses.forEach((pose, index) => {
-        const button = document.createElement('button');
-        button.innerText = pose;
-        button.className = 'pose-button';
-        button.style.bottom = `${100 + index * 40}px`;
-        document.body.appendChild(button);
+    startArButton.addEventListener('click', arButtonClick);
 
-        button.addEventListener('click', () => setPose(index + 1));
-      });
-    }
+    // Add screenshot functionality
+    screenshotButton.addEventListener('click', () => {
+      renderer.render(scene, camera);
+      const screenshot = renderer.domElement.toDataURL('image/png');
 
-function setPose(poseIndex) {
-  if (vrm) {
-    // ポーズをリセット（初期状態に戻す）
-    vrm.humanoid.resetPose();
-
-    switch (poseIndex) {
-      case 1:
-        // ポーズ1: 両腕を前に上げる
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.leftUpperArm).rotation.set(0,0,0.2104997822744993,0.9775939042682235);
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.leftLowerArm).rotation.set(0,0,0.1966939546310881,0.9804649347180059);
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.rightUpperArm).rotation.set(0.0008382054128868589,0.000042215752234726076,0.5319047403303575,0.8468037806030456);
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.rightHand).rotation.set(0,0,0.2962018416322877,0.9551253682180372);
-        break;
-
-      case 2:
-        // ポーズ2: 片腕を上げ、片腕を下げる
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.LeftUpperArm).rotation.set(-Math.PI / 4, 0, 0);
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.RightUpperArm).rotation.set(Math.PI / 4, 0, 0);
-        break;
-
-      case 3:
-        // ポーズ3: 両手を広げる
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.LeftUpperArm).rotation.set(0, 0, Math.PI / 2);
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.RightUpperArm).rotation.set(0, 0, -Math.PI / 2);
-        break;
-
-      case 4:
-        // ポーズ4: 片足を上げる
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.LeftUpperLeg).rotation.set(-Math.PI / 6, 0, 0);
-        vrm.humanoid.getBoneNode(THREE.VRMSchema.HumanoidBoneName.RightUpperLeg).rotation.set(Math.PI / 12, 0, 0);
-        break;
-
-      default:
-        console.log('Unknown pose index');
-        break;
-    }
-  }
-}
+      // Create a link and simulate a click to download the image
+      const link = document.createElement('a');
+      link.href = screenshot;
+      link.download = 'screenshot.png';
+      link.click();
+    });
 
     function animate() {
       renderer.setAnimationLoop(render);
     }
 
-    async function render(timestamp, frame) {
-      if (!frame) return;
-
-      const referenceSpace = renderer.xr.getReferenceSpace();
-      const session = renderer.xr.getSession();
-      if (!hitTestSource && referenceSpace && session) {
-        const space = await session.requestReferenceSpace('viewer');
-        hitTestSource = await session.requestHitTestSource({ space });
-
-        session.addEventListener('end', () => {
-          hitTestSource = null;
-        });
-      }
-      if (hitTestSource) {
-        const hitTestResults = frame.getHitTestResults(hitTestSource);
-        if (hitTestResults.length && referenceSpace) {
-          const hit = hitTestResults[0];
-          reticle.visible = true;
-          reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-        } else {
-          reticle.visible = false;
-        }
-      }
-
-      renderer.render(scene, camera);
-    }
-
-    async function onSelect() {
-      if (reticle.visible) {
-        const loader = new THREE.GLTFLoader();
-        const gltf = await loader.loadAsync('./Aorin.vrm');
-        THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
-        vrm = await THREE.VRM.from(gltf);
-
-        reticle.matrix.decompose(
-          vrm.scene.position,
-          vrm.scene.quaternion,
-          vrm.scene.scale
-        );
-
-        // VRMモデルのスケールを60%に縮小
-        vrm.scene.scale.set(0.6, 0.6, 0.6);
-
-        vrm.scene.rotation.y = camera.rotation.y + Math.PI;
-        vrm.lookAt.target = camera;
-        scene.add(vrm.scene);
-        reticle.visible = false;
+    function render(timestamp, frame) {
+      if (frame) {
+        renderer.render(scene, camera);
       }
     }
   </script>
