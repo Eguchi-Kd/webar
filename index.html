@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebAR with Screenshot</title>
+  <title>WebAR with Triple Tap to Place VRM Model</title>
   <style>
     body {
       margin: 0;
@@ -43,7 +43,9 @@
 
   <script>
     const startArButton = document.getElementById('startArButton');
-    let vrm;
+    let vrm; // Global reference to the VRM model
+    let lastTap = 0;
+    let tapCount = 0;
 
     // Three.js setup
     const scene = new THREE.Scene();
@@ -93,14 +95,27 @@
 
     startArButton.addEventListener('click', arButtonClick);
 
-    // VRM model loading and positioning
-    async function onSelect() {
+    // VRM model loading and positioning on triple tap
+    async function onTripleTap() {
       if (reticle.visible) {
         const loader = new THREE.GLTFLoader();
         const gltf = await loader.loadAsync('./AliciaSolid.vrm');
         THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
-        vrm = await THREE.VRM.from(gltf);
+        
+        // Dispose of previous model if it exists
+        if (vrm) {
+          scene.remove(vrm.scene);
+          vrm.scene.traverse((object) => {
+            if (object.isMesh) {
+              object.geometry.dispose();
+              object.material.dispose();
+            }
+          });
+          vrm = null;
+        }
 
+        // Load and position new VRM model
+        vrm = await THREE.VRM.from(gltf);
         vrm.scene.scale.set(0.6, 0.6, 0.6); // Scale down VRM model
         reticle.matrix.decompose(
           vrm.scene.position,
@@ -113,24 +128,23 @@
       }
     }
 
-    controller.addEventListener('select', onSelect);
-
-    // Double-tap screenshot functionality
-    let lastTap = 0;
+    // Triple tap detection
     document.addEventListener('touchend', (event) => {
       const currentTime = new Date().getTime();
       const tapLength = currentTime - lastTap;
-      if (tapLength < 300 && tapLength > 0) {
-        // Double-tap detected
-        renderer.render(scene, camera);
-        const screenshot = renderer.domElement.toDataURL('image/png');
 
-        // Create a link and simulate a click to download the image
-        const link = document.createElement('a');
-        link.href = screenshot;
-        link.download = 'screenshot.png';
-        link.click();
+      if (tapLength < 300 && tapLength > 0) {
+        tapCount++;
+
+        // Triple tap detected
+        if (tapCount === 3) {
+          onTripleTap();
+          tapCount = 0;
+        }
+      } else {
+        tapCount = 1; // Reset count if not a quick sequence
       }
+
       lastTap = currentTime;
     });
 
