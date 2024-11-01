@@ -25,14 +25,6 @@
       transform: translateX(-50%);
       z-index: 1000;
     }
-    .screenshot-button {
-      position: absolute;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 1001;
-      display: none; /* Start AR時に表示 */
-    }
   </style>
 </head>
 <body>
@@ -48,12 +40,9 @@
   <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
 
   <button id="startArButton" class="ar-button">Start AR</button>
-  <button id="screenshotButton" class="screenshot-button">Take Screenshot</button>
 
   <script>
     const startArButton = document.getElementById('startArButton');
-    const screenshotButton = document.getElementById('screenshotButton');
-
     let vrm;
 
     // Three.js setup
@@ -89,7 +78,6 @@
     // Start AR session
     async function arButtonClick() {
       startArButton.style.display = 'none'; // Hide start button
-      screenshotButton.style.display = 'block'; // Show screenshot button
 
       const overlayElem = document.getElementById('overlay');
       const options = {
@@ -127,16 +115,23 @@
 
     controller.addEventListener('select', onSelect);
 
-    // Screenshot functionality
-    screenshotButton.addEventListener('click', () => {
-      renderer.render(scene, camera);
-      const screenshot = renderer.domElement.toDataURL('image/png');
+    // Double-tap screenshot functionality
+    let lastTap = 0;
+    document.addEventListener('touchend', (event) => {
+      const currentTime = new Date().getTime();
+      const tapLength = currentTime - lastTap;
+      if (tapLength < 300 && tapLength > 0) {
+        // Double-tap detected
+        renderer.render(scene, camera);
+        const screenshot = renderer.domElement.toDataURL('image/png');
 
-      // Create a link and simulate a click to download the image
-      const link = document.createElement('a');
-      link.href = screenshot;
-      link.download = 'screenshot.png';
-      link.click();
+        // Create a link and simulate a click to download the image
+        const link = document.createElement('a');
+        link.href = screenshot;
+        link.download = 'screenshot.png';
+        link.click();
+      }
+      lastTap = currentTime;
     });
 
     // Animation loop
