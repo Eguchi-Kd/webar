@@ -1,171 +1,171 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebAR test</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>model-viewer Quick Look (USDZ) test</title>
+
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
+    html,body { height:100%; margin:0; }
+    .full { width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#000; color:#fff; }
+    #panel {
+      position: absolute; top: 12px; left: 12px; background:rgba(0,0,0,0.6);
+      padding:10px; border-radius:8px; font-family:system-ui; z-index: 9999;
+      color:#fff; font-size:14px;
     }
-    #overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      pointer-events: none;
-      z-index: 999;
-    }
+    #log { max-width:320px; max-height:220px; overflow:auto; font-size:12px; margin-top:6px; background:rgba(255,255,255,0.02); padding:6px; border-radius:6px; }
+    button { padding:8px 12px; margin-right:6px; }
+    model-viewer { width:100%; height:100%; }
   </style>
 </head>
 <body>
-  <div id="overlay"></div>
 
-  <!-- Three.js Library -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- WebXR Polyfill (for browsers that do not fully support WebXR) -->
-  <script src="https://cdn.jsdelivr.net/npm/webxr-polyfill@latest/build/webxr-polyfill.min.js"></script>
-  <!-- GLTFLoader for loading VRM models -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <!-- VRM libraries -->
-  <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
+  <!-- model-viewer (CDN module) -->
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 
-  <script>
-    // WebARサポートの判定
-    (async () => {
-      const isArSupported = navigator.xr && (await navigator.xr.isSessionSupported('immersive-ar'))
+  <div id="panel">
+    <div>
+      <button id="btnOpenAR">Start AR (auto mode)</button>
+      <button id="btnOpenQuickLook">Force Quick Look (iOS)</button>
+      <span id="platform"></span>
+    </div>
+    <div style="margin-top:8px;">
+      <b>Metrics</b>
+      <div>Model load time: <span id="loadTime">—</span></div>
+      <div>AR start time (click → ar-status=presented/quicklook): <span id="arStartTime">—</span></div>
+      <div>Model size (bytes): <span id="modelSize">—</span></div>
+    </div>
+    <div id="log"></div>
+  </div>
 
-      if (isArSupported) {
-        // WebARがサポートされている場合に、ボタンなどを表示
-        const button = document.createElement('button')
-        button.innerText = 'Start AR'
-        button.style.position = 'absolute'
-        button.style.bottom = '20px'
-        button.style.left = '50%'
-        button.style.transform = 'translateX(-50%)'
-        button.style.zIndex = '1000'
-        document.body.appendChild(button)
+  <!-- model-viewer element -->
+  <!-- - src: glb (for on-page preview / webxr)
+       - ios-src: usdz (for Quick Look on iOS)
+       - ar-modes: try webxr first, then scene-viewer (Android), then quick-look (iOS)
+  -->
+  <model-viewer id="mv"
+    src="./Aorin.glb"
+    ios-src="./Aorin.usdz"
+    alt="Aorin model"
+    ar
+    ar-modes="webxr scene-viewer quick-look"
+    camera-controls
+    environment-image="neutral"
+    style="width:100%; height:100%; display:block;">
+  </model-viewer>
 
-        button.addEventListener('click', arButtonClick)
-      } else {
-        alert('WebAR is not supported on this device')
-        alert('このデバイス・ブラウザはWebXRをサポートしていません。別のブラウザを試すかブラウザ・サイトへの許可を見直してください。')
-      }
-    })()
+<script>
+  const mv = document.getElementById('mv');
+  const btn = document.getElementById('btnOpenAR');
+  const btnQuick = document.getElementById('btnOpenQuickLook');
+  const logEl = document.getElementById('log');
+  const loadTimeEl = document.getElementById('loadTime');
+  const arStartEl = document.getElementById('arStartTime');
+  const sizeEl = document.getElementById('modelSize');
+  const platformEl = document.getElementById('platform');
 
-    // Three.js の準備
-    const scene = new THREE.Scene()
-    const camera = new THREE.PerspectiveCamera(
-      70,
-      window.innerWidth / window.innerHeight,
-      0.01,
-      20
-    )
-    const light = new THREE.DirectionalLight(0xffffff)
-    light.position.set(1, 1, 1).normalize()
-    scene.add(light)
+  function log(msg){
+    const line = document.createElement('div');
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logEl.prepend(line);
+  }
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setSize(window.innerWidth, window.innerHeight)
-    renderer.setPixelRatio(window.devicePixelRatio)
-    document.body.appendChild(renderer.domElement)
-    renderer.xr.enabled = true
-    renderer.xr.setReferenceSpaceType('local')
+  // detect platform
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  platformEl.textContent = isIOS ? 'iOS detected' : 'non-iOS';
+  log('platform: ' + platformEl.textContent);
 
-    // controllerの設定
-    const controller = renderer.xr.getController(0)
-    controller.addEventListener('select', onSelect)
-    scene.add(controller)
+  // measure model load time
+  let t0 = performance.now();
+  mv.addEventListener('load', () => {
+    const t = Math.round(performance.now() - t0);
+    loadTimeEl.textContent = `${t} ms`;
+    log(`model-viewer load event fired (${t} ms)`);
+  });
 
-    // ヒットテスト用のreticleを用意
-    const reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial()
-    )
-    reticle.matrixAutoUpdate = false
-    reticle.visible = false
-    scene.add(reticle)
-
-    let hitTestSource = null
-
-    // ARセッションの開始
-    async function arButtonClick() {
-      const overlayElem = document.getElementById('overlay')
-      const options = {
-        requiredFeatures: ['hit-test'],
-        optionalFeatures: ['dom-overlay'],
-        domOverlay: { root: overlayElem }
-      }
-      const xrSession = await navigator.xr.requestSession('immersive-ar', options)
-      await renderer.xr.setSession(xrSession)
-      animate()
-    }
-
-    // レンダリングのループ
-    function animate() {
-      renderer.setAnimationLoop(render)
-    }
-
-    async function render(timestamp, frame) {
-      if (!frame) return
-
-      const referenceSpace = renderer.xr.getReferenceSpace()
-      const session = renderer.xr.getSession()
-      if (!hitTestSource && referenceSpace && session) {
-        const space = await session.requestReferenceSpace('viewer')
-        hitTestSource = await session.requestHitTestSource({ space })
-
-        session.addEventListener('end', () => {
-          hitTestSource = null
-        })
-      }
-      if (hitTestSource) {
-        const hitTestResults = frame.getHitTestResults(hitTestSource)
-        if (hitTestResults.length && referenceSpace) {
-          const hit = hitTestResults[0]
-          reticle.visible = true
-          reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix)
-        } else {
-          reticle.visible = false
+  // fetch model HEAD to get size (works if same origin / CORS allows)
+  async function fetchModelSize(url){
+    try {
+      const r = await fetch(url, { method: 'HEAD' });
+      if (r.ok){
+        const cl = r.headers.get('content-length');
+        if (cl) {
+          sizeEl.textContent = cl;
+          log(`content-length: ${cl} bytes`);
+          return;
         }
       }
-
-      renderer.render(scene, camera)
+      // fallback: fetch and measure
+      const r2 = await fetch(url);
+      const blob = await r2.blob();
+      sizeEl.textContent = blob.size;
+      log(`fetched model (fallback) size: ${blob.size}`);
+    } catch (e){
+      log('Could not fetch model size: ' + e);
     }
+  }
+  fetchModelSize('./Aorin.glb');
 
-    //VRMモデルの表示
-     async function onSelect() {
-       if (reticle.visible) {
-        // const loader = new GLTFLoader();
-        // loader.load(
-        //   'AliciaSolid.vrm',
-        //   (gltf) => {
-        //     VRM.from(gltf).then(vrm => {
-        //       //vrm.position.setFromMatrixPosition(reticle.matrix);
-        //       scene.add(vrm.scene);
-        //     });
-        //   }
-        // );
-
-        const loader = new THREE.GLTFLoader();
-        const gltf = await loader.loadAsync('./Aorin.vrm')
-        THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene)
-        const vrm = await THREE.VRM.from(gltf)
-
-        reticle.matrix.decompose(
-          vrm.scene.position,
-          vrm.scene.quaternion,
-          vrm.scene.scale,
-        )
-        vrm.scene.rotation.y = camera.rotation.y + Math.PI
-        vrm.lookAt.target = camera
-        vrm.scene.scale.set(0.1, 0.1, 0.1);
-        scene.add(vrm.scene)
-        reticle.visible = false;
-      }
+  // measure AR start: from click to 'ar-status' with status 'session-started' OR quick-look button tap
+  let clickTs = 0;
+  btn.addEventListener('click', async () => {
+    clickTs = performance.now();
+    log('Start AR clicked (auto mode)');
+    // model-viewer will choose the best AR mode
+    // programmatically ask model-viewer to activate AR:
+    try {
+      await mv.activateAR(); // returns a promise when activation attempt begins
+      log('model-viewer.activateAR() called');
+    } catch (e) {
+      log('activateAR() error: ' + e);
     }
-  </script>
+  });
+
+  // button to force Quick Look via model-viewer API (useful for testing on iOS)
+  btnQuick.addEventListener('click', async () => {
+    clickTs = performance.now();
+    log('Force Quick Look click');
+    // model-viewer doesn't expose a direct 'open quick look' api, but this attribute influences selection:
+    // we set ar-modes so Quick Look will be an option, then call activateAR()
+    try {
+      await mv.activateAR();
+      log('activateAR() called (quicklook request)');
+    } catch(e){
+      log('activateAR() error: ' + e);
+    }
+  });
+
+  // Listen to ar-status and quick-look-button-tapped events
+  mv.addEventListener('ar-status', (ev) => {
+    const s = ev.detail && ev.detail.status ? ev.detail.status : 'unknown';
+    const now = Math.round(performance.now() - clickTs);
+    log('ar-status: ' + s + ' (since click: ' + now + ' ms)');
+    if (clickTs) arStartEl.textContent = now + ' ms';
+  });
+
+  mv.addEventListener('quick-look-button-tapped', (ev) => {
+    const now = Math.round(performance.now() - clickTs);
+    log('quick-look-button-tapped (since click: ' + now + ' ms)');
+    if (clickTs) arStartEl.textContent = now + ' ms';
+  });
+
+  // ar-tracking indicates ARKit/WebXR tracking status (tracking / not-tracking)
+  mv.addEventListener('ar-tracking', (ev) => {
+    const s = ev.detail && ev.detail.tracking ? ev.detail.tracking : 'unknown';
+    log('ar-tracking: ' + s);
+  });
+
+  // some environments emit 'scene-graph-ready' when the on-page GL scene is ready
+  mv.addEventListener('scene-graph-ready', () => log('scene-graph-ready'));
+
+  // errors
+  mv.addEventListener('error', (ev) => {
+    log('model-viewer error: ' + JSON.stringify(ev.detail || ev));
+  });
+
+  // helpful hint: if the model has no ar button on iOS, try adding ios-src and ensure usdz is reachable.
+</script>
+
 </body>
 </html>
