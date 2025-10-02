@@ -3,170 +3,297 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>model-viewer Quick Look (USDZ) test</title>
-
+  <title>WebAR auto-detect test</title>
   <style>
-    html,body { height:100%; margin:0; }
-    .full { width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#000; color:#fff; }
+    html,body { height:100%; margin:0; font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
     #panel {
-      position: absolute; top: 12px; left: 12px; background:rgba(0,0,0,0.6);
-      padding:10px; border-radius:8px; font-family:system-ui; z-index: 9999;
-      color:#fff; font-size:14px;
+      position: absolute; top:12px; left:12px; z-index:9999;
+      background: rgba(0,0,0,0.6); color:#fff; padding:12px; border-radius:8px; max-width:360px;
     }
-    #log { max-width:320px; max-height:220px; overflow:auto; font-size:12px; margin-top:6px; background:rgba(255,255,255,0.02); padding:6px; border-radius:6px; }
-    button { padding:8px 12px; margin-right:6px; }
-    model-viewer { width:100%; height:100%; }
+    #log { max-height:220px; overflow:auto; font-size:12px; margin-top:8px; background:rgba(255,255,255,0.03); padding:6px; border-radius:6px; }
+    button { padding:8px 10px; margin-right:6px; }
+    model-viewer { width:100%; height:100%; display:block; }
+    #overlay { position:absolute; inset:0; pointer-events:none; z-index:1000; }
   </style>
 </head>
 <body>
-
-  <!-- model-viewer (CDN module) -->
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-
   <div id="panel">
     <div>
-      <button id="btnOpenAR">Start AR (auto mode)</button>
-      <button id="btnOpenQuickLook">Force Quick Look (iOS)</button>
-      <span id="platform"></span>
+      <button id="btnAuto">Auto Start (detect device)</button>
+      <button id="btnForceWebXR">Force WebXR (Android)</button>
+      <button id="btnForceQuickLook">Force Quick Look (iOS)</button>
     </div>
+    <div style="margin-top:8px;">Platform: <span id="plat">—</span></div>
     <div style="margin-top:8px;">
-      <b>Metrics</b>
-      <div>Model load time: <span id="loadTime">—</span></div>
-      <div>AR start time (click → ar-status=presented/quicklook): <span id="arStartTime">—</span></div>
-      <div>Model size (bytes): <span id="modelSize">—</span></div>
+      <b>Status</b>
+      <div id="status">idle</div>
+      <div id="errors" style="color:#f88; margin-top:6px;"></div>
     </div>
     <div id="log"></div>
   </div>
 
-  <!-- model-viewer element -->
-  <!-- - src: glb (for on-page preview / webxr)
-       - ios-src:  (for Quick Look on iOS)
-       - ar-modes: try webxr first, then scene-viewer (Android), then quick-look (iOS)
-  -->
-  <model-viewer id="mv"
-    src="./Aorin.glb"
-    ios-src="./むーもん.usdz"
+  <!-- model-viewer (for iOS Quick Look + fallback) -->
+  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+
+  <!-- Three.js (keep using r128 for compatibility with your original code) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- GLTFLoader (example UMD that attaches to THREE) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <!-- (optional) three-vrm (old v0.6 style used in your original code) -->
+  <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
+
+  <div id="overlay"></div>
+
+  <!-- hidden model-viewer element (we'll show/use it when needed) -->
+  <model-viewer id="mv" style="width:100%; height:100%; display:none;"
     alt="Aorin model"
     ar
     ar-modes="webxr scene-viewer quick-look"
     camera-controls
-    environment-image="neutral"
-    style="width:100%; height:100%; display:block;">
+    environment-image="neutral">
   </model-viewer>
 
 <script>
-  const mv = document.getElementById('mv');
-  const btn = document.getElementById('btnOpenAR');
-  const btnQuick = document.getElementById('btnOpenQuickLook');
+(async function(){
   const logEl = document.getElementById('log');
-  const loadTimeEl = document.getElementById('loadTime');
-  const arStartEl = document.getElementById('arStartTime');
-  const sizeEl = document.getElementById('modelSize');
-  const platformEl = document.getElementById('platform');
+  const statusEl = document.getElementById('status');
+  const errEl = document.getElementById('errors');
+  const platEl = document.getElementById('plat');
 
   function log(msg){
-    const line = document.createElement('div');
-    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    logEl.prepend(line);
+    const d = document.createElement('div');
+    d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logEl.prepend(d);
   }
+  function setStatus(s){ statusEl.textContent = s; log('status -> ' + s); }
+  function setError(e){ errEl.textContent = e; log('ERROR: ' + e); }
 
-  // detect platform
+  // platform detection
   const ua = navigator.userAgent || '';
   const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  platformEl.textContent = isIOS ? 'iOS detected' : 'non-iOS';
-  log('platform: ' + platformEl.textContent);
+  const isAndroid = /Android/.test(ua);
+  platEl.textContent = isIOS ? 'iOS' : (isAndroid ? 'Android' : 'Other');
 
-  // measure model load time
-  let t0 = performance.now();
-  mv.addEventListener('load', () => {
-    const t = Math.round(performance.now() - t0);
-    loadTimeEl.textContent = `${t} ms`;
-    log(`model-viewer load event fired (${t} ms)`);
-  });
+  // resolve asset URL relative to this HTML file (avoids absolute /path issues)
+  function resolveAssetUrl(filename){
+    // base path = directory of current page
+    const base = location.pathname.replace(/\/[^\/]*$/, '/'); // ends with /
+    // if page is at https://domain/webar/index.html -> base = /webar/
+    return location.origin + base + filename;
+  }
 
-  // fetch model HEAD to get size (works if same origin / CORS allows)
-  async function fetchModelSize(url){
+  const GLB_NAME = 'Aorin.glb';
+  const USDZ_NAME = 'Aorin.usdz';
+  const glbUrl = resolveAssetUrl(GLB_NAME);
+  const usdzUrl = resolveAssetUrl(USDZ_NAME);
+
+  log('Resolved GLB: ' + glbUrl);
+  log('Resolved USDZ: ' + usdzUrl);
+
+  // HEAD-check helper (returns true if resource exists)
+  async function existsHead(url){
     try {
       const r = await fetch(url, { method: 'HEAD' });
-      if (r.ok){
-        const cl = r.headers.get('content-length');
-        if (cl) {
-          sizeEl.textContent = cl;
-          log(`content-length: ${cl} bytes`);
-          return;
-        }
+      if (r.ok) return true;
+      // some servers may not allow HEAD, fallback to GET with range
+      if (r.status === 405 || r.status === 403) {
+        const r2 = await fetch(url, { method: 'GET', headers: { Range: 'bytes=0-0' }});
+        return r2.ok;
       }
-      // fallback: fetch and measure
-      const r2 = await fetch(url);
-      const blob = await r2.blob();
-      sizeEl.textContent = blob.size;
-      log(`fetched model (fallback) size: ${blob.size}`);
-    } catch (e){
-      log('Could not fetch model size: ' + e);
+      return false;
+    } catch(e){
+      return false;
     }
   }
-  fetchModelSize('./Aorin.glb');
 
-  // measure AR start: from click to 'ar-status' with status 'session-started' OR quick-look button tap
-  let clickTs = 0;
-  btn.addEventListener('click', async () => {
-    clickTs = performance.now();
-    log('Start AR clicked (auto mode)');
-    // model-viewer will choose the best AR mode
-    // programmatically ask model-viewer to activate AR:
+  // check assets
+  setStatus('checking assets...');
+  const glbExists = await existsHead(glbUrl);
+  const usdzExists = await existsHead(usdzUrl);
+  if (!glbExists) {
+    setError(`GLB not found at ${glbUrl} (404). Please ensure ${GLB_NAME} is in the same directory as this HTML or adjust path).`);
+    setStatus('error: missing GLB');
+    return;
+  }
+  log('GLB exists');
+  if (!usdzExists) {
+    log('USDZ not found; iOS Quick Look will not work unless you supply ' + USDZ_NAME);
+  } else {
+    log('USDZ exists');
+  }
+
+  // prepare model-viewer element with resolved urls
+  const mv = document.getElementById('mv');
+  mv.setAttribute('src', glbUrl);
+  if (usdzExists) mv.setAttribute('ios-src', usdzUrl);
+
+  // --- Three.js / WebXR setup (for Android WebXR path) ---
+  // create scene / renderer etc but don't start animation until needed
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
+  const light = new THREE.DirectionalLight(0xffffff);
+  light.position.set(1,1,1).normalize();
+  scene.add(light);
+
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.xr.enabled = true;
+  renderer.xr.setReferenceSpaceType('local');
+  document.body.appendChild(renderer.domElement);
+
+  // controller + reticle
+  const controller = renderer.xr.getController(0);
+  controller.addEventListener('select', onSelect);
+  scene.add(controller);
+
+  const reticle = new THREE.Mesh(
+    new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial()
+  );
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+
+  let hitTestSource = null;
+
+  // GLTF loader instance
+  const loader = new THREE.GLTFLoader();
+
+  async function arButtonClick_WebXR(){
+    setStatus('requesting WebXR session...');
     try {
-      await mv.activateAR(); // returns a promise when activation attempt begins
-      log('model-viewer.activateAR() called');
-    } catch (e) {
-      log('activateAR() error: ' + e);
+      const options = { requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{ root: document.getElementById('overlay') } };
+      const xrSession = await navigator.xr.requestSession('immersive-ar', options);
+      await renderer.xr.setSession(xrSession);
+      setStatus('WebXR session started');
+      renderer.setAnimationLoop(render);
+    } catch(e) {
+      setError('Failed to start WebXR session: ' + e);
+      setStatus('WebXR start failed');
     }
-  });
+  }
 
-  // button to force Quick Look via model-viewer API (useful for testing on iOS)
-  btnQuick.addEventListener('click', async () => {
-    clickTs = performance.now();
-    log('Force Quick Look click');
-    // model-viewer doesn't expose a direct 'open quick look' api, but this attribute influences selection:
-    // we set ar-modes so Quick Look will be an option, then call activateAR()
+  function render(time, frame){
+    if (!frame) return;
+    const session = renderer.xr.getSession();
+    const refSpace = renderer.xr.getReferenceSpace();
+    if (!hitTestSource && refSpace && session){
+      session.requestReferenceSpace('viewer').then((space) => {
+        session.requestHitTestSource({ space }).then((source) => {
+          hitTestSource = source;
+          session.addEventListener('end', () => { hitTestSource = null; });
+        });
+      }).catch(()=>{});
+    }
+
+    if (hitTestSource){
+      const hits = frame.getHitTestResults(hitTestSource);
+      if (hits.length && refSpace){
+        const hit = hits[0];
+        reticle.visible = true;
+        reticle.matrix.fromArray(hit.getPose(refSpace).transform.matrix);
+      } else {
+        reticle.visible = false;
+      }
+    }
+
+    renderer.render(scene, camera);
+  }
+
+  // called when user selects (on WebXR controller)
+  async function onSelect(){
+    if (!reticle.visible) return;
+    try {
+      const gltf = await loader.loadAsync(glbUrl);
+      if (THREE.VRMUtils) THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
+      const vrm = await THREE.VRM.from(gltf).catch(()=>null);
+      const obj = vrm ? vrm.scene : gltf.scene;
+      reticle.matrix.decompose(obj.position, obj.quaternion, obj.scale);
+      obj.rotation.y = camera.rotation.y + Math.PI;
+      if (vrm) vrm.lookAt.target = camera;
+      obj.scale.setScalar(0.1);
+      scene.add(obj);
+      reticle.visible = false;
+      log('placed model into scene');
+    } catch(e){
+      setError('Model load failed in onSelect(): ' + e);
+    }
+  }
+
+  // --- High level button / auto flow ---
+  document.getElementById('btnAuto').addEventListener('click', async () => {
+    setError(''); setStatus('auto-start clicked');
+    // iOS path: prefer Quick Look via model-viewer if ios-src exists
+    if (isIOS && usdzExists){
+      setStatus('iOS detected: launching Quick Look via model-viewer');
+      mv.style.display = 'block';
+      try {
+        await mv.activateAR(); // model-viewer chooses quick-look
+        setStatus('model-viewer: activateAR() called');
+      } catch(e){
+        setError('model-viewer activateAR error: ' + e);
+      }
+      return;
+    }
+
+    // Android path: prefer WebXR if supported
+    if (isAndroid && navigator.xr && navigator.xr.isSessionSupported){
+      setStatus('Android detected: checking WebXR support...');
+      try {
+        const supported = await navigator.xr.isSessionSupported('immersive-ar');
+        if (supported) {
+          setStatus('WebXR supported: starting WebXR flow');
+          await arButtonClick_WebXR();
+          return;
+        } else {
+          log('WebXR not supported -> fallback to model-viewer activateAR()');
+          // fallthrough to model-viewer fallback
+        }
+      } catch(e){
+        log('isSessionSupported check failed: ' + e + ' -> fallback');
+      }
+    }
+
+    // default fallback: use model-viewer activateAR (scene-viewer on Android if available, quick-look on iOS)
+    setStatus('Fallback: model-viewer activateAR()');
+    mv.style.display = 'block';
     try {
       await mv.activateAR();
-      log('activateAR() called (quicklook request)');
+      setStatus('model-viewer activateAR() called');
     } catch(e){
-      log('activateAR() error: ' + e);
+      setError('Fallback activateAR error: ' + e);
     }
   });
 
-  // Listen to ar-status and quick-look-button-tapped events
-  mv.addEventListener('ar-status', (ev) => {
-    const s = ev.detail && ev.detail.status ? ev.detail.status : 'unknown';
-    const now = Math.round(performance.now() - clickTs);
-    log('ar-status: ' + s + ' (since click: ' + now + ' ms)');
-    if (clickTs) arStartEl.textContent = now + ' ms';
+  // Force-webxr button (for testing)
+  document.getElementById('btnForceWebXR').addEventListener('click', async ()=>{
+    setError('');
+    if (!navigator.xr || !navigator.xr.isSessionSupported) { setError('navigator.xr or isSessionSupported not available'); return; }
+    const sup = await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false);
+    if (!sup) { setError('WebXR immersive-ar not supported'); return; }
+    await arButtonClick_WebXR();
   });
 
-  mv.addEventListener('quick-look-button-tapped', (ev) => {
-    const now = Math.round(performance.now() - clickTs);
-    log('quick-look-button-tapped (since click: ' + now + ' ms)');
-    if (clickTs) arStartEl.textContent = now + ' ms';
+  // Force quicklook (for testing on iOS)
+  document.getElementById('btnForceQuickLook').addEventListener('click', async ()=>{
+    setError('');
+    mv.style.display = 'block';
+    try {
+      await mv.activateAR();
+    } catch(e){ setError('activateAR() error: ' + e); }
   });
 
-  // ar-tracking indicates ARKit/WebXR tracking status (tracking / not-tracking)
-  mv.addEventListener('ar-tracking', (ev) => {
-    const s = ev.detail && ev.detail.tracking ? ev.detail.tracking : 'unknown';
-    log('ar-tracking: ' + s);
+  // resize handling
+  window.addEventListener('resize', ()=> {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  // some environments emit 'scene-graph-ready' when the on-page GL scene is ready
-  mv.addEventListener('scene-graph-ready', () => log('scene-graph-ready'));
-
-  // errors
-  mv.addEventListener('error', (ev) => {
-    log('model-viewer error: ' + JSON.stringify(ev.detail || ev));
-  });
-
-  // helpful hint: if the model has no ar button on iOS, try adding ios-src and ensure usdz is reachable.
+  setStatus('ready');
+  log('Ready. Press Auto Start.');
+})();
 </script>
-
 </body>
 </html>
-
