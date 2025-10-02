@@ -1,18 +1,17 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>WebAR auto-detect test</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>WebAR auto-detect VRM support</title>
   <style>
-    html,body { height:100%; margin:0; font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+    html,body { height:100%; margin:0; font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; background:#000; color:#fff; }
     #panel {
       position: absolute; top:12px; left:12px; z-index:9999;
       background: rgba(0,0,0,0.6); color:#fff; padding:12px; border-radius:8px; max-width:360px;
     }
-    #log { max-height:220px; overflow:auto; font-size:12px; margin-top:8px; background:rgba(255,255,255,0.03); padding:6px; border-radius:6px; }
-    button { padding:8px 10px; margin-right:6px; }
-    model-viewer { width:100%; height:100%; display:block; }
+    #log { max-height:220px; overflow:auto; font-size:12px; margin-top:8px; background:rgba(255,255,255,0.02); padding:6px; border-radius:6px; }
+    button { padding:8px 10px; margin-right:6px; margin-top:6px; }
     #overlay { position:absolute; inset:0; pointer-events:none; z-index:1000; }
   </style>
 </head>
@@ -32,19 +31,17 @@
     <div id="log"></div>
   </div>
 
-  <!-- model-viewer (for iOS Quick Look + fallback) -->
+  <!-- model-viewer (for iOS Quick Look + fallback when glb present) -->
   <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 
-  <!-- Three.js (keep using r128 for compatibility with your original code) -->
+  <!-- Three.js (r128 for compatibility with VRM v0.6 usage) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- GLTFLoader (example UMD that attaches to THREE) -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <!-- (optional) three-vrm (old v0.6 style used in your original code) -->
   <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
 
   <div id="overlay"></div>
 
-  <!-- hidden model-viewer element (we'll show/use it when needed) -->
+  <!-- hidden model-viewer element (displayed only if glb exists or needed) -->
   <model-viewer id="mv" style="width:100%; height:100%; display:none;"
     alt="Aorin model"
     ar
@@ -55,11 +52,11 @@
 
 <script>
 (async function(){
+  // --- UI helpers
   const logEl = document.getElementById('log');
   const statusEl = document.getElementById('status');
   const errEl = document.getElementById('errors');
   const platEl = document.getElementById('plat');
-
   function log(msg){
     const d = document.createElement('div');
     d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -68,34 +65,34 @@
   function setStatus(s){ statusEl.textContent = s; log('status -> ' + s); }
   function setError(e){ errEl.textContent = e; log('ERROR: ' + e); }
 
-  // platform detection
+  // --- platform detection
   const ua = navigator.userAgent || '';
   const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/.test(ua);
   platEl.textContent = isIOS ? 'iOS' : (isAndroid ? 'Android' : 'Other');
 
-  // resolve asset URL relative to this HTML file (avoids absolute /path issues)
+  // --- resolve assets relative to current HTML
   function resolveAssetUrl(filename){
-    // base path = directory of current page
-    const base = location.pathname.replace(/\/[^\/]*$/, '/'); // ends with /
-    // if page is at https://domain/webar/index.html -> base = /webar/
+    const base = location.pathname.replace(/\/[^\/]*$/, '/'); // directory part
     return location.origin + base + filename;
   }
 
+  const VRM_NAME = 'Aorin.vrm';
   const GLB_NAME = 'Aorin.glb';
   const USDZ_NAME = 'Aorin.usdz';
+  const vrmUrl = resolveAssetUrl(VRM_NAME);
   const glbUrl = resolveAssetUrl(GLB_NAME);
   const usdzUrl = resolveAssetUrl(USDZ_NAME);
 
+  log('Resolved VRM: ' + vrmUrl);
   log('Resolved GLB: ' + glbUrl);
   log('Resolved USDZ: ' + usdzUrl);
 
-  // HEAD-check helper (returns true if resource exists)
   async function existsHead(url){
     try {
       const r = await fetch(url, { method: 'HEAD' });
       if (r.ok) return true;
-      // some servers may not allow HEAD, fallback to GET with range
+      // fallback try range GET for servers that disallow HEAD
       if (r.status === 405 || r.status === 403) {
         const r2 = await fetch(url, { method: 'GET', headers: { Range: 'bytes=0-0' }});
         return r2.ok;
@@ -106,50 +103,56 @@
     }
   }
 
-  // check assets
   setStatus('checking assets...');
+  const vrmExists = await existsHead(vrmUrl);
   const glbExists = await existsHead(glbUrl);
   const usdzExists = await existsHead(usdzUrl);
-  if (!glbExists) {
-    setError(`GLB not found at ${glbUrl} (404). Please ensure ${GLB_NAME} is in the same directory as this HTML or adjust path).`);
-    setStatus('error: missing GLB');
+
+  if (!vrmExists && !glbExists && !usdzExists) {
+    setError(`No model found. Please upload one of: ${VRM_NAME}, ${GLB_NAME}, or ${USDZ_NAME} in same folder as this HTML.`);
+    setStatus('error: no models');
     return;
   }
-  log('GLB exists');
-  if (!usdzExists) {
-    log('USDZ not found; iOS Quick Look will not work unless you supply ' + USDZ_NAME);
+  log('asset check results: vrm=' + vrmExists + ', glb=' + glbExists + ', usdz=' + usdzExists);
+
+  // configure model-viewer only if glb exists (model-viewer cannot directly load VRM)
+  const mv = document.getElementById('mv');
+  if (glbExists) {
+    mv.setAttribute('src', glbUrl);
+    log('model-viewer src set to glb');
   } else {
-    log('USDZ exists');
+    log('no glb: model-viewer on-page preview disabled');
+  }
+  if (usdzExists) {
+    mv.setAttribute('ios-src', usdzUrl);
+    log('model-viewer ios-src set to usdz');
   }
 
-  // prepare model-viewer element with resolved urls
-  const mv = document.getElementById('mv');
-  mv.setAttribute('src', glbUrl);
-  if (usdzExists) mv.setAttribute('ios-src', usdzUrl);
-
-  // --- Three.js / WebXR setup (for Android WebXR path) ---
-  // create scene / renderer etc but don't start animation until needed
+  // --- three.js scene setup (used for WebXR and for VRM on-page preview)
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
+  camera.position.set(0, 1.6, 2.5);
   const light = new THREE.DirectionalLight(0xffffff);
   light.position.set(1,1,1).normalize();
   scene.add(light);
+  const amb = new THREE.AmbientLight(0x666666);
+  scene.add(amb);
 
-  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha: true });
+  const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType('local');
   document.body.appendChild(renderer.domElement);
 
-  // controller + reticle
+  // reticle & controller for WebXR hit-test placement
   const controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
 
   const reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI/2),
-    new THREE.MeshBasicMaterial()
+    new THREE.MeshBasicMaterial({ color: 0x00ff00 })
   );
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
@@ -157,9 +160,57 @@
 
   let hitTestSource = null;
 
-  // GLTF loader instance
   const loader = new THREE.GLTFLoader();
 
+  // --- preview: if only VRM exists (no glb), load VRM for on-page preview
+  let previewModel = null;
+  let previewIsVRM = false;
+
+  async function loadPreviewIfNeeded(){
+    if (glbExists) {
+      // If glb exists, model-viewer handles on-page preview; we leave three.js blank
+      log('glb exists: using model-viewer for preview.');
+      return;
+    }
+    // otherwise, try to load vrm and display in three.js preview (non-AR)
+    if (vrmExists) {
+      setStatus('loading VRM for page preview...');
+      try {
+        const gltf = await loader.loadAsync(vrmUrl);
+        if (THREE.VRMUtils) THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
+        const vrm = await THREE.VRM.from(gltf).catch(()=>null);
+        const obj = vrm ? vrm.scene : gltf.scene;
+        obj.scale.setScalar(1.0);
+        obj.position.set(0,0,0);
+        scene.add(obj);
+        previewModel = obj;
+        previewIsVRM = !!vrm;
+        setStatus('preview VRM loaded');
+        // start a simple animation loop for preview
+        animatePreview();
+      } catch(e){
+        setError('Failed to load VRM for preview: ' + e);
+      }
+    } else {
+      log('no vrm for preview.');
+    }
+  }
+
+  // simple rotating preview animation
+  let previewAnimating = false;
+  function animatePreview(){
+    if (previewAnimating) return;
+    previewAnimating = true;
+    const loop = () => {
+      if (!previewAnimating) return;
+      requestAnimationFrame(loop);
+      if (previewModel) previewModel.rotation.y += 0.005;
+      renderer.render(scene, camera);
+    };
+    loop();
+  }
+
+  // --- WebXR path functions
   async function arButtonClick_WebXR(){
     setStatus('requesting WebXR session...');
     try {
@@ -168,7 +219,7 @@
       await renderer.xr.setSession(xrSession);
       setStatus('WebXR session started');
       renderer.setAnimationLoop(render);
-    } catch(e) {
+    } catch(e){
       setError('Failed to start WebXR session: ' + e);
       setStatus('WebXR start failed');
     }
@@ -201,43 +252,50 @@
     renderer.render(scene, camera);
   }
 
-  // called when user selects (on WebXR controller)
+  // called when user selects in XR to place model
   async function onSelect(){
-    if (!reticle.visible) return;
+    if (!reticle.visible) {
+      log('select but reticle not visible');
+      return;
+    }
+    setStatus('placing model from ' + (vrmExists ? VRM_NAME : GLB_NAME));
     try {
-      const gltf = await loader.loadAsync(glbUrl);
+      const modelUrlToLoad = vrmExists ? vrmUrl : (glbExists ? glbUrl : null);
+      if (!modelUrlToLoad) { setError('No model available to place in AR'); return; }
+      const gltf = await loader.loadAsync(modelUrlToLoad);
       if (THREE.VRMUtils) THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
-      const vrm = await THREE.VRM.from(gltf).catch(()=>null);
-      const obj = vrm ? vrm.scene : gltf.scene;
+      const maybeVrm = await THREE.VRM.from(gltf).catch(()=>null);
+      const obj = maybeVrm ? maybeVrm.scene : gltf.scene;
       reticle.matrix.decompose(obj.position, obj.quaternion, obj.scale);
       obj.rotation.y = camera.rotation.y + Math.PI;
-      if (vrm) vrm.lookAt.target = camera;
-      obj.scale.setScalar(0.1);
+      if (maybeVrm) maybeVrm.lookAt.target = camera;
+      // scale down if model too large
+      obj.scale.multiplyScalar(0.1);
       scene.add(obj);
       reticle.visible = false;
-      log('placed model into scene');
+      log('model placed into AR scene');
     } catch(e){
-      setError('Model load failed in onSelect(): ' + e);
+      setError('Model load/place failed: ' + e);
     }
   }
 
-  // --- High level button / auto flow ---
+  // --- high-level auto flow (device detection)
   document.getElementById('btnAuto').addEventListener('click', async () => {
     setError(''); setStatus('auto-start clicked');
-    // iOS path: prefer Quick Look via model-viewer if ios-src exists
+    // iOS: prefer Quick Look if usdz exists
     if (isIOS && usdzExists){
       setStatus('iOS detected: launching Quick Look via model-viewer');
       mv.style.display = 'block';
       try {
-        await mv.activateAR(); // model-viewer chooses quick-look
-        setStatus('model-viewer: activateAR() called');
+        await mv.activateAR(); // model-viewer chooses quick-look on iOS
+        setStatus('model-viewer: activateAR() called (quick look)');
       } catch(e){
         setError('model-viewer activateAR error: ' + e);
       }
       return;
     }
 
-    // Android path: prefer WebXR if supported
+    // Android path: prefer WebXR
     if (isAndroid && navigator.xr && navigator.xr.isSessionSupported){
       setStatus('Android detected: checking WebXR support...');
       try {
@@ -247,26 +305,32 @@
           await arButtonClick_WebXR();
           return;
         } else {
-          log('WebXR not supported -> fallback to model-viewer activateAR()');
-          // fallthrough to model-viewer fallback
+          log('WebXR not supported -> fallback to model-viewer or preview');
         }
       } catch(e){
         log('isSessionSupported check failed: ' + e + ' -> fallback');
       }
     }
 
-    // default fallback: use model-viewer activateAR (scene-viewer on Android if available, quick-look on iOS)
-    setStatus('Fallback: model-viewer activateAR()');
-    mv.style.display = 'block';
-    try {
-      await mv.activateAR();
-      setStatus('model-viewer activateAR() called');
-    } catch(e){
-      setError('Fallback activateAR error: ' + e);
+    // fallback: if glb exists, use model-viewer activateAR (SceneViewer on Android). If no glb but vrm exists, show three.js preview (no AR)
+    if (glbExists) {
+      setStatus('Fallback: using model-viewer activateAR() with GLB');
+      mv.style.display = 'block';
+      try {
+        await mv.activateAR();
+        setStatus('model-viewer activateAR() called');
+      } catch(e){
+        setError('Fallback activateAR error: ' + e);
+      }
+    } else if (vrmExists) {
+      setStatus('No GLB for model-viewer AR; showing on-page VRM preview (no AR).');
+      await loadPreviewIfNeeded();
+    } else {
+      setError('No suitable model found for fallback.');
     }
   });
 
-  // Force-webxr button (for testing)
+  // force webxr (testing)
   document.getElementById('btnForceWebXR').addEventListener('click', async ()=>{
     setError('');
     if (!navigator.xr || !navigator.xr.isSessionSupported) { setError('navigator.xr or isSessionSupported not available'); return; }
@@ -275,14 +339,20 @@
     await arButtonClick_WebXR();
   });
 
-  // Force quicklook (for testing on iOS)
+  // force quicklook (testing)
   document.getElementById('btnForceQuickLook').addEventListener('click', async ()=>{
     setError('');
+    if (!usdzExists) { setError('No USDZ available for Quick Look'); return; }
     mv.style.display = 'block';
     try {
       await mv.activateAR();
     } catch(e){ setError('activateAR() error: ' + e); }
   });
+
+  // if glb does not exist, prepare VRM on-page preview early so user sees model before AR
+  if (!glbExists && vrmExists) {
+    await loadPreviewIfNeeded();
+  }
 
   // resize handling
   window.addEventListener('resize', ()=> {
