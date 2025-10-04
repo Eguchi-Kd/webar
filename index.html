@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>WebAR auto-detect VRM support (enhanced)</title>
+  <title>WebAR auto-detect VRM support (overlay fix)</title>
   <style>
     html,body { height:100%; margin:0; font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; background:#000; color:#fff; }
     #panel {
@@ -12,8 +12,8 @@
     }
     #log { max-height:220px; overflow:auto; font-size:12px; margin-top:8px; background:rgba(255,255,255,0.02); padding:6px; border-radius:6px; }
     button { padding:8px 10px; margin-right:6px; margin-top:6px; }
-    /* overlay now accepts pointer events and will host our UI during AR */
-    #overlay { position:absolute; inset:0; /* pointer-events set below inline to ensure it's active early */ }
+    /* overlay: keep pointer-events NONE so clicks pass through — UI elements inside overlay will enable pointer-events themselves */
+    #overlay { position:absolute; inset:0; pointer-events:none; z-index:10000; }
     .hidden-by-enh { display:none !important; }
   </style>
 </head>
@@ -41,8 +41,9 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
 
-  <!-- overlay: make sure it accepts pointer events (important for DOM Overlay + gestures) -->
-  <div id="overlay" style="pointer-events:auto; z-index:10000;"></div>
+  <!-- overlay: pointer-events:none here allows clicks to pass to underlying DOM.
+       UI elements we add into overlay will themselves set pointer-events:auto so they still receive clicks. -->
+  <div id="overlay"></div>
 
   <!-- hidden model-viewer element (displayed only if glb exists or needed) -->
   <model-viewer id="mv" style="width:100%; height:100%; display:none;"
@@ -144,7 +145,6 @@
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
-  // ensure pointer events on canvas are usable for gestures
   renderer.domElement.style.touchAction = 'none';
   renderer.domElement.style.userSelect = 'none';
   renderer.xr.enabled = true;
@@ -171,7 +171,6 @@
   // --- preview: if only VRM exists (no glb), load VRM for on-page preview
   let previewModel = null;
   let previewIsVRM = false;
-  // placedModel is the object our gestures will manipulate (preview or AR-placed)
   let placedModel = null;
 
   async function loadPreviewIfNeeded(){
@@ -191,10 +190,8 @@
         scene.add(obj);
         previewModel = obj;
         previewIsVRM = !!vrm;
-        // set placedModel to preview initially so gestures affect preview model
         placedModel = obj;
         setStatus('preview VRM loaded');
-        // start a simple animation loop for preview
         animatePreview();
       } catch(e){
         setError('Failed to load VRM for preview: ' + e);
@@ -220,7 +217,6 @@
   async function arButtonClick_WebXR(){
     setStatus('requesting WebXR session...');
     try {
-      // use overlay root (the #overlay element) that we configured in DOM
       const overlayRoot = document.getElementById('overlay');
       const options = { requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{ root: overlayRoot } };
       const xrSession = await navigator.xr.requestSession('immersive-ar', options);
@@ -260,7 +256,6 @@
     renderer.render(scene, camera);
   }
 
-  // called when user selects in XR to place model
   async function onSelect(){
     if (!reticle.visible) {
       log('select but reticle not visible');
@@ -270,8 +265,6 @@
     try {
       const modelUrlToLoad = vrmExists ? vrmUrl : (glbExists ? glbUrl : null);
       if (!modelUrlToLoad) { setError('No model available to place in AR'); return; }
-
-      // If a model was previously placed, move it to the new reticle position rather than adding another model.
       if (placedModel) {
         const newPos = new THREE.Vector3();
         const newQuat = new THREE.Quaternion();
@@ -285,7 +278,6 @@
         reticle.visible = false;
         return;
       }
-
       const gltf = await loader.loadAsync(modelUrlToLoad);
       if (THREE.VRMUtils) THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
       const maybeVrm = await THREE.VRM.from(gltf).catch(()=>null);
@@ -306,20 +298,17 @@
   // --- high-level auto flow (device detection)
   document.getElementById('btnAuto').addEventListener('click', async () => {
     setError(''); setStatus('auto-start clicked');
-    // iOS: prefer Quick Look if usdz exists
     if (isIOS && usdzExists){
       setStatus('iOS detected: launching Quick Look via model-viewer');
       mv.style.display = 'block';
       try {
-        await mv.activateAR(); // model-viewer chooses quick-look on iOS
+        await mv.activateAR();
         setStatus('model-viewer: activateAR() called (quick look)');
       } catch(e){
         setError('model-viewer activateAR error: ' + e);
       }
       return;
     }
-
-    // Android path: prefer WebXR
     if (isAndroid && navigator.xr && navigator.xr.isSessionSupported){
       setStatus('Android detected: checking WebXR support...');
       try {
@@ -335,8 +324,6 @@
         log('isSessionSupported check failed: ' + e + ' -> fallback');
       }
     }
-
-    // fallback: if glb exists, use model-viewer activateAR (SceneViewer on Android). If no glb but vrm exists, show three.js preview (no AR)
     if (glbExists) {
       setStatus('Fallback: using model-viewer activateAR() with GLB');
       mv.style.display = 'block';
@@ -354,7 +341,6 @@
     }
   });
 
-  // force webxr (testing)
   document.getElementById('btnForceWebXR').addEventListener('click', async ()=>{
     setError('');
     if (!navigator.xr || !navigator.xr.isSessionSupported) { setError('navigator.xr or isSessionSupported not available'); return; }
@@ -363,7 +349,6 @@
     await arButtonClick_WebXR();
   });
 
-  // force quicklook (testing)
   document.getElementById('btnForceQuickLook').addEventListener('click', async ()=>{
     setError('');
     if (!usdzExists) { setError('No USDZ available for Quick Look'); return; }
@@ -373,12 +358,11 @@
     } catch(e){ setError('activateAR() error: ' + e); }
   });
 
-  // if glb does not exist, prepare VRM on-page preview early so user sees model before AR
   if (!glbExists && vrmExists) {
     await loadPreviewIfNeeded();
   }
 
-  // --- initialize enhancements AFTER renderer and preview/placedModel may be prepared ---
+  // --- initialize enhancements AFTER renderer/preview ready ---
   try {
     const enhModule = await import('./js/webar-enhancements.js');
     enhModule.initEnhancements({
@@ -387,7 +371,7 @@
       getPlacedObject: () => placedModel,
       modelViewerEl: mv,
       uiRoot: document.body,
-      overlayRoot: document.getElementById('overlay'), // PASS overlay root here so UI & events live in overlay (works during AR)
+      overlayRoot: document.getElementById('overlay'),
       coreUiElements: {
         panel: document.getElementById('panel'),
         log: document.getElementById('log'),
@@ -400,7 +384,6 @@
     log('webar-enhancements failed to load: ' + e);
   }
 
-  // resize handling
   window.addEventListener('resize', ()=> {
     camera.aspect = window.innerWidth/window.innerHeight;
     camera.updateProjectionMatrix();
