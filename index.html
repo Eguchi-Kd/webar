@@ -12,8 +12,8 @@
     }
     #log { max-height:220px; overflow:auto; font-size:12px; margin-top:8px; background:rgba(255,255,255,0.02); padding:6px; border-radius:6px; }
     button { padding:8px 10px; margin-right:6px; margin-top:6px; }
-    #overlay { position:absolute; inset:0; pointer-events:none; z-index:1000; }
-    /* small helper for when enhancements toggle hides panel */
+    /* overlay now accepts pointer events and will host our UI during AR */
+    #overlay { position:absolute; inset:0; /* pointer-events set below inline to ensure it's active early */ }
     .hidden-by-enh { display:none !important; }
   </style>
 </head>
@@ -41,7 +41,8 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@0.6.0"></script>
 
-  <div id="overlay"></div>
+  <!-- overlay: make sure it accepts pointer events (important for DOM Overlay + gestures) -->
+  <div id="overlay" style="pointer-events:auto; z-index:10000;"></div>
 
   <!-- hidden model-viewer element (displayed only if glb exists or needed) -->
   <model-viewer id="mv" style="width:100%; height:100%; display:none;"
@@ -175,11 +176,9 @@
 
   async function loadPreviewIfNeeded(){
     if (glbExists) {
-      // If glb exists, model-viewer handles on-page preview; we leave three.js blank
       log('glb exists: using model-viewer for preview.');
       return;
     }
-    // otherwise, try to load vrm and display in three.js preview (non-AR)
     if (vrmExists) {
       setStatus('loading VRM for page preview...');
       try {
@@ -205,7 +204,6 @@
     }
   }
 
-  // simple rotating preview animation
   let previewAnimating = false;
   function animatePreview(){
     if (previewAnimating) return;
@@ -219,11 +217,12 @@
     loop();
   }
 
-  // --- WebXR path functions
   async function arButtonClick_WebXR(){
     setStatus('requesting WebXR session...');
     try {
-      const options = { requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{ root: document.getElementById('overlay') } };
+      // use overlay root (the #overlay element) that we configured in DOM
+      const overlayRoot = document.getElementById('overlay');
+      const options = { requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{ root: overlayRoot } };
       const xrSession = await navigator.xr.requestSession('immersive-ar', options);
       await renderer.xr.setSession(xrSession);
       setStatus('WebXR session started');
@@ -274,15 +273,12 @@
 
       // If a model was previously placed, move it to the new reticle position rather than adding another model.
       if (placedModel) {
-        // decompose reticle transform and apply to placedModel (preserve scale multiplication factor)
         const newPos = new THREE.Vector3();
         const newQuat = new THREE.Quaternion();
         const newScale = new THREE.Vector3();
         reticle.matrix.decompose(newPos, newQuat, newScale);
-        // apply position & rotation; keep existing scale multiplied by ratio if needed
         placedModel.position.copy(newPos);
         placedModel.quaternion.copy(newQuat);
-        // Optionally adjust scale: keep existing scale but ensure it's not 0
         if (!placedModel.scale || placedModel.scale.length() === 0) placedModel.scale.setScalar(0.1);
         setStatus('Moved existing model to new position (no new model added)');
         log('Moved existing placedModel to new reticle position');
@@ -290,7 +286,6 @@
         return;
       }
 
-      // no existing model: load and add
       const gltf = await loader.loadAsync(modelUrlToLoad);
       if (THREE.VRMUtils) THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
       const maybeVrm = await THREE.VRM.from(gltf).catch(()=>null);
@@ -298,10 +293,8 @@
       reticle.matrix.decompose(obj.position, obj.quaternion, obj.scale);
       obj.rotation.y = camera.rotation.y + Math.PI;
       if (maybeVrm) maybeVrm.lookAt.target = camera;
-      // scale down if model too large
       obj.scale.multiplyScalar(0.1);
       scene.add(obj);
-      // set as placedModel so gestures will affect this placed AR object when possible
       placedModel = obj;
       reticle.visible = false;
       log('model placed into AR scene (new placedModel set)');
@@ -385,18 +378,16 @@
     await loadPreviewIfNeeded();
   }
 
-  // --- HERE: initialize enhancements AFTER renderer and preview/placedModel may be prepared ---
-  // we dynamically import the enhancements module and wire it up with our renderer and placedModel accessor
+  // --- initialize enhancements AFTER renderer and preview/placedModel may be prepared ---
   try {
     const enhModule = await import('./js/webar-enhancements.js');
-    // initEnhancements expects getPlacedObject() function that returns current placedModel
     enhModule.initEnhancements({
       renderer: renderer,
       camera: camera,
       getPlacedObject: () => placedModel,
       modelViewerEl: mv,
       uiRoot: document.body,
-      // pass optional hooks so enhancements can toggle core UI elements
+      overlayRoot: document.getElementById('overlay'), // PASS overlay root here so UI & events live in overlay (works during AR)
       coreUiElements: {
         panel: document.getElementById('panel'),
         log: document.getElementById('log'),
