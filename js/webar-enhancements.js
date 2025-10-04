@@ -1,5 +1,6 @@
 // js/webar-enhancements.js
-// Gesture + UI enhancements with dynamic XR session switching.
+// Provides UI toggle + Screenshot + Pinch scale + Swipe rotate + Pose change.
+// Usage: const enh = await initEnhancements({...}); enh.setXRSession(session);
 
 export async function initEnhancements({
   renderer = null,
@@ -18,11 +19,12 @@ export async function initEnhancements({
     return e;
   }
 
-  // inject CSS
+  // inject CSS once
   if (!document.getElementById('webar-enh-style')) {
     const style = createEl('style', '', `
       #webar-ui { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); z-index: 10001; display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
       #webar-ui .webar-btn { background: rgba(0,0,0,0.6); color:#fff; border:1px solid rgba(255,255,255,0.08); padding:8px 10px; border-radius:8px; font-size:14px; }
+      #webar-ui .webar-btn.ghost { background:transparent; border:1px dashed rgba(255,255,255,0.12); }
       #webar-top-log { position: absolute; left: 12px; top: 12px; z-index: 10001; max-width: 60%; pointer-events:auto; color:#fff; font-size:13px; }
       .ui-hidden #webar-ui > .hidable { display:none !important; }
       .hidden-by-enh { display:none !important; }
@@ -38,7 +40,9 @@ export async function initEnhancements({
   const btnToggle = createEl('button', 'webar-btn', 'UI 表示/非表示');
   const hidableWrapper = createEl('div', 'hidable', '');
   const btnScreenshot = createEl('button', 'webar-btn', 'スクリーンショット');
+  const btnPose = createEl('button', 'webar-btn', 'ポーズ変更');
   hidableWrapper.appendChild(btnScreenshot);
+  hidableWrapper.appendChild(btnPose);
   root.appendChild(btnToggle);
   root.appendChild(hidableWrapper);
 
@@ -46,11 +50,10 @@ export async function initEnhancements({
   topLog.id = 'webar-top-log';
   topLog.style.pointerEvents = 'auto';
 
-  // append to overlayRoot if available, else to uiRoot
+  // choose container: overlayRoot if provided else uiRoot
   const container = overlayRoot || uiRoot || document.body;
   try {
     if (overlayRoot) {
-      // keep overlayRoot default pointer-events none so canvas receives gestures in non-XR mode
       try { overlayRoot.style.pointerEvents = 'none'; } catch(e){}
       try { if (getComputedStyle(overlayRoot).position === 'static') overlayRoot.style.position = 'fixed'; } catch(e){}
     }
@@ -81,8 +84,10 @@ export async function initEnhancements({
     logTop('UI トグル');
   });
 
+  // screenshot helpers
   async function screenshotFromRenderer() {
     if (!renderer) throw new Error('renderer not provided');
+    // hide core UI
     document.documentElement.classList.add('ui-hidden');
     if (corePanel) corePanel.classList.add('hidden-by-enh');
     if (coreLog) coreLog.classList.add('hidden-by-enh');
@@ -103,6 +108,7 @@ export async function initEnhancements({
       for (let i=0;i<n;i++) u8[i]=bstr.charCodeAt(i);
       blob = new Blob([u8], { type: mime });
     }
+    // restore UI
     document.documentElement.classList.remove('ui-hidden');
     if (corePanel) corePanel.classList.remove('hidden-by-enh');
     if (coreLog) coreLog.classList.remove('hidden-by-enh');
@@ -129,9 +135,9 @@ export async function initEnhancements({
       if (renderer && renderer.domElement) {
         blob = await screenshotFromRenderer();
       } else if (modelViewerEl) {
-        logTop('model-viewer screenshot not available in this environment');
+        try { /* fallback attempts if model-viewer exposes blob methods */ } catch(e){ console.warn(e); }
       }
-      if (!blob) throw new Error('スクリーンショット失敗 (適切な描画領域が見つかりません)');
+      if (!blob) throw new Error('スクリーンショット失敗 (描画領域が見つかりません)');
       await downloadBlob(blob, 'webar_screenshot.png');
       logTop('スクリーンショット完了');
     } catch (e) {
@@ -140,17 +146,132 @@ export async function initEnhancements({
     }
   });
 
-  // ==== Gesture handling code with dynamic event target switching ====
-  // We'll attach listeners to a "currentTarget" and provide setXRSession(session) to switch.
+  // --- Pose loading & application ---
+  const POSE_COUNT = 5;
+  let poses = []; // array of { version, pose: {...} }
+  let poseIndex = 0;
+
+  async function fetchPoseFile(n) {
+    // try assets/poseN.json then ./poseN.json
+    const candidates = [`./assets/pose${n}.json`, `./pose${n}.json`, `./pose${n}.json`];
+    for (const url of candidates) {
+      try {
+        const r = await fetch(url);
+        if (r.ok) {
+          const json = await r.json();
+          logTop(`Loaded pose ${n} from ${url}`);
+          return json;
+        }
+      } catch(e){}
+    }
+    return null;
+  }
+
+  async function preloadPoses() {
+    poses = [];
+    for (let i=1;i<=POSE_COUNT;i++){
+      const p = await fetchPoseFile(i);
+      if (p && p.pose) {
+        poses.push(p);
+      } else {
+        poses.push(null);
+        logTop(`pose${i}.json not found or invalid`);
+      }
+    }
+    logTop(`Poses loaded: ${poses.filter(x=>x).length}/${POSE_COUNT}`);
+  }
+
+  // find node by key (search node.name includes key, case-insensitive)
+  function findNodeByKey(root, key) {
+    let found = null;
+    root.traverse((node) => {
+      if (found) return;
+      if (!node.name) return;
+      const name = node.name.toLowerCase();
+      if (name.indexOf(key.toLowerCase()) !== -1) {
+        found = node;
+      } else {
+        // some nodes may include ":" or "_" segments, test segments
+        const simple = name.replace(/[:_]/g,' ');
+        if (simple.indexOf(key.toLowerCase()) !== -1) found = node;
+      }
+    });
+    return found;
+  }
+
+  // apply pose (quaternions) object to placed object
+  function applyPoseToObject(rootObj, poseObj) {
+    if (!rootObj || !poseObj) return { ok:false, msg:'no root or pose' };
+    const missing = [];
+    const applied = [];
+    for (const key of Object.keys(poseObj)) {
+      const data = poseObj[key];
+      if (!data || !Array.isArray(data.rotation) || data.rotation.length < 4) {
+        missing.push(key);
+        continue;
+      }
+      const qarr = data.rotation;
+      const targetNode = findNodeByKey(rootObj, key);
+      if (!targetNode) {
+        missing.push(key);
+        continue;
+      }
+      const q = new THREE.Quaternion(qarr[0], qarr[1], qarr[2], qarr[3]);
+      // apply quaternion
+      try {
+        targetNode.quaternion.copy(q);
+        applied.push(key);
+      } catch(e){
+        console.warn('applyPose error for', key, e);
+        missing.push(key);
+      }
+    }
+    return { ok: true, applied, missing };
+  }
+
+  // apply next pose in loop
+  function applyNextPose(){
+    if (!poses || poses.length === 0) {
+      logTop('No poses loaded');
+      return;
+    }
+    // cycle index
+    poseIndex = (poseIndex + 1) % poses.length;
+    const p = poses[poseIndex];
+    if (!p || !p.pose) {
+      logTop(`pose ${poseIndex+1} is not available`);
+      return;
+    }
+    const target = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
+    if (!target) {
+      logTop('No placed object to apply pose to');
+      return;
+    }
+    const result = applyPoseToObject(target, p.pose);
+    logTop(`ポーズ ${poseIndex+1} を適用 — applied ${result.applied.length}, missing ${result.missing.length}`);
+    if (result.missing && result.missing.length > 0) {
+      console.warn('pose missing keys:', result.missing);
+    }
+  }
+
+  // bind pose button
+  btnPose.addEventListener('click', () => {
+    applyNextPose();
+  });
+
+  // preload poses (fire-and-forget)
+  preloadPoses().catch(e => { console.warn('pose preload failed', e); });
+
+  // ==== Gesture handling (existing from prior version) ====
+  // choose event target: prefer canvas so events reach it even when overlayRoot is pointer-events:none
+  const eventTargetInitial = (renderer && renderer.domElement) ? renderer.domElement : (overlayRoot || modelViewerEl || document.body);
+  // we'll allow dynamic switching via setXRSession
   let currentTarget = null;
   let listenersAttached = false;
-
-  // named handlers so we can remove them later
   const pointers = new Map();
   let gestureState = { mode: 'none', startX:0, startY:0, startDist:0, startScale:1, startRotationY:0 };
 
   function getDistance(a,b){ const dx=b.x-a.x, dy=b.y-a.y; return Math.hypot(dx,dy); }
-
   function trySetPointerCapture(target, id){
     try { if (target && typeof target.setPointerCapture === 'function') { target.setPointerCapture(id); return true; } } catch(e){} return false;
   }
@@ -163,17 +284,18 @@ export async function initEnhancements({
     const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
     if (!placed) return;
     if (pointers.size === 1) {
-      gestureState.mode='rotate';
+      gestureState.mode = 'rotate';
       const p = pointers.values().next().value;
-      gestureState.startX=p.x; gestureState.startY=p.y;
-      gestureState.startRotationY = (placed.rotation && typeof placed.rotation.y==='number') ? placed.rotation.y : (placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
-    } else if (pointers.size===2) {
-      gestureState.mode='pinch';
-      const it = pointers.values(); const pA = it.next().value, pB = it.next().value;
+      gestureState.startX = p.x; gestureState.startY = p.y;
+      gestureState.startRotationY = (placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
+    } else if (pointers.size === 2) {
+      gestureState.mode = 'pinch';
+      const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
       gestureState.startDist = getDistance(pA,pB);
+      const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
       gestureState.startScale = placed && placed.scale ? placed.scale.x : 1;
     } else {
-      gestureState.mode='none';
+      gestureState.mode = 'none';
     }
   }
 
@@ -182,68 +304,78 @@ export async function initEnhancements({
     pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
     const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
     if (!placed) return;
-    if (gestureState.mode==='rotate' && pointers.size===1) {
+    if (gestureState.mode === 'rotate' && pointers.size === 1) {
       const p = pointers.values().next().value;
       const dx = p.x - gestureState.startX;
       const ROT_SPEED = 0.008;
       const newY = gestureState.startRotationY - dx * ROT_SPEED;
-      if (placed.rotation) placed.rotation.y = newY;
-      else if (placed.quaternion) { const eul = new THREE.Euler(0,newY,0); placed.quaternion.setFromEuler(eul); }
-    } else if (gestureState.mode==='pinch' && pointers.size===2) {
-      const it = pointers.values(); const pA = it.next().value, pB = it.next().value;
+      if (placed.rotation) {
+        placed.rotation.y = newY;
+      } else if (placed.quaternion) {
+        const e = new THREE.Euler(0, newY, 0);
+        placed.quaternion.setFromEuler(e);
+      }
+    } else if (gestureState.mode === 'pinch' && pointers.size === 2) {
+      const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
       const curDist = getDistance(pA,pB);
-      if (gestureState.startDist>0) {
+      if (gestureState.startDist > 0) {
         const ratio = curDist / gestureState.startDist;
         const newScale = Math.max(0.05, Math.min(8, gestureState.startScale * ratio));
-        if (placed.scale) placed.scale.setScalar(newScale);
-        else { try { placed.traverse((c)=>{ if (c.isMesh) c.scale.setScalar(newScale); }); } catch(e){} }
+        if (placed.scale) {
+          placed.scale.setScalar(newScale);
+        } else {
+          try { placed.traverse((c) => { if (c.isMesh) c.scale.setScalar(newScale); }); } catch (err) {}
+        }
       }
     }
   }
 
   function onPointerUp(e){
-    try { if (currentTarget && typeof currentTarget.releasePointerCapture === 'function') currentTarget.releasePointerCapture(e.pointerId); } catch(e){}
+    try {
+      if (currentTarget && typeof currentTarget.releasePointerCapture === 'function') currentTarget.releasePointerCapture(e.pointerId);
+    } catch(e){}
     try { if (e.target && typeof e.target.releasePointerCapture === 'function') e.target.releasePointerCapture(e.pointerId); } catch(e){}
     pointers.delete(e.pointerId);
-    if (pointers.size===0) gestureState.mode='none';
-    else if (pointers.size===1) {
+    if (pointers.size === 0) gestureState.mode = 'none';
+    else if (pointers.size === 1) {
       const p = pointers.values().next().value;
-      gestureState.mode='rotate';
-      gestureState.startX=p.x; gestureState.startY=p.y;
+      gestureState.mode = 'rotate';
+      gestureState.startX = p.x; gestureState.startY = p.y;
       const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
-      gestureState.startRotationY = (placed && placed.rotation && typeof placed.rotation.y==='number') ? placed.rotation.y : (placed && placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
+      gestureState.startRotationY = (placed && placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed && placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
     }
   }
 
   function addListenersTo(target){
-    if (!target || listenersAttached) return;
+    if (!target) return;
+    // remove previous first
+    if (currentTarget) removeListenersFrom(currentTarget);
     currentTarget = target;
     try { target.style.touchAction = 'none'; } catch(e){}
     target.addEventListener('pointerdown', onPointerDown, { passive:false });
     target.addEventListener('pointermove', onPointerMove, { passive:false });
     target.addEventListener('pointerup', onPointerUp, { passive:false });
     target.addEventListener('pointercancel', onPointerUp, { passive:false });
-    target.addEventListener('lostpointercapture', (ev)=> { pointers.delete(ev.pointerId); }, { passive:true });
+    target.addEventListener('lostpointercapture', (ev) => { pointers.delete(ev.pointerId); }, { passive:true });
     listenersAttached = true;
-    logTop('ジェスチャー listeners added to ' + (target.id ? '#'+target.id : target.tagName || 'target'));
+    logTop('ジェスチャー listeners attached to ' + (target.id ? '#'+target.id : target.tagName || 'target'));
   }
 
   function removeListenersFrom(target){
-    if (!target || !listenersAttached) return;
+    if (!target) return;
     try {
       target.removeEventListener('pointerdown', onPointerDown);
       target.removeEventListener('pointermove', onPointerMove);
       target.removeEventListener('pointerup', onPointerUp);
       target.removeEventListener('pointercancel', onPointerUp);
-      // lostpointercapture removal not trivial as it was added with lambda; ignore
     } catch(e){}
     listenersAttached = false;
     currentTarget = null;
     pointers.clear();
-    gestureState.mode='none';
+    gestureState.mode = 'none';
   }
 
-  // initial binding: prefer renderer.domElement (non-XR mode)
+  // initial attach to canvas if available
   if (renderer && renderer.domElement) {
     addListenersTo(renderer.domElement);
   } else if (overlayRoot) {
@@ -253,12 +385,10 @@ export async function initEnhancements({
   }
 
   // API to switch binding when XR session starts/ends
-  function setXRSession(session){
-    // if session present, use overlayRoot (it will be visible as DOM overlay)
+  function setXRSession(session) {
     if (session) {
-      // remove existing
+      // XR active: attach to overlayRoot if available (DOM overlay receives touch events in XR)
       if (currentTarget) removeListenersFrom(currentTarget);
-      // enable overlayRoot pointer-events so it will receive events in XR
       if (overlayRoot) {
         try { overlayRoot.style.pointerEvents = 'auto'; } catch(e){}
         addListenersTo(overlayRoot);
@@ -269,7 +399,7 @@ export async function initEnhancements({
       }
       logTop('XR session active: gestures bound to overlay/document');
     } else {
-      // session ended -> ensure overlayRoot returns to pointer-events:none (so canvas receives events outside XR)
+      // XR ended: return to canvas binding and set overlay to pass-through
       if (currentTarget) removeListenersFrom(currentTarget);
       if (overlayRoot) try { overlayRoot.style.pointerEvents = 'none'; } catch(e){}
       if (renderer && renderer.domElement) addListenersTo(renderer.domElement);
@@ -278,7 +408,7 @@ export async function initEnhancements({
     }
   }
 
-  // return control object
+  // return public API
   return {
     uiRoot: root,
     btnToggle,
