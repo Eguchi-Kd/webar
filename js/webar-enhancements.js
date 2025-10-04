@@ -1,6 +1,6 @@
 // js/webar-enhancements.js
 // Provides UI toggle + Screenshot + Pinch scale + Swipe rotate for Three.Object3D placed in the scene.
-// Usage: initEnhancements({ renderer, camera, getPlacedObject, modelViewerEl, uiRoot, coreUiElements })
+// Usage: initEnhancements({ renderer, camera, getPlacedObject, modelViewerEl, uiRoot, overlayRoot, coreUiElements })
 
 export function initEnhancements({
   renderer = null,
@@ -8,9 +8,9 @@ export function initEnhancements({
   getPlacedObject = null,
   modelViewerEl = null,
   uiRoot = document.body,
+  overlayRoot = null,
   coreUiElements = {}
 } = {}) {
-  // --- small helpers ---
   function createEl(tag, cls, html) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -18,22 +18,24 @@ export function initEnhancements({
     return e;
   }
 
-  // --- CSS for controls (inject once) ---
+  // inject CSS once
   if (!document.getElementById('webar-enh-style')) {
     const style = createEl('style', '', `
-      #webar-ui { position: fixed; right: 12px; top: 50%; transform: translateY(-50%); z-index: 99999; display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
+      #webar-ui { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); z-index: 10001; display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
       #webar-ui .webar-btn { background: rgba(0,0,0,0.6); color:#fff; border:1px solid rgba(255,255,255,0.08); padding:8px 10px; border-radius:8px; font-size:14px; }
       #webar-ui .webar-btn.ghost { background:transparent; border:1px dashed rgba(255,255,255,0.12); }
-      #webar-top-log { position: fixed; left: 12px; top: 12px; z-index: 99999; max-width: 60%; pointer-events:none; color:#fff; font-size:13px; }
+      #webar-top-log { position: absolute; left: 12px; top: 12px; z-index: 10001; max-width: 60%; pointer-events:none; color:#fff; font-size:13px; }
       .ui-hidden #webar-ui > .hidable { display:none !important; }
+      .hidden-by-enh { display:none !important; }
     `);
     style.id = 'webar-enh-style';
     document.head.appendChild(style);
   }
 
-  // --- build UI ---
+  // build UI
   const root = createEl('div', '');
   root.id = 'webar-ui';
+  // keep position absolute (overlayRoot is full-screen)
   const btnToggle = createEl('button', 'webar-btn', 'UI 表示/非表示');
   const hidableWrapper = createEl('div', 'hidable', '');
   const btnScreenshot = createEl('button', 'webar-btn', 'スクリーンショット');
@@ -43,10 +45,28 @@ export function initEnhancements({
   root.appendChild(btnToggle);
   root.appendChild(hidableWrapper);
 
+  // top log
   const topLog = createEl('div', 'webar-top-log');
   topLog.id = 'webar-top-log';
-  uiRoot.appendChild(topLog);
-  uiRoot.appendChild(root);
+
+  // choose container: overlayRoot if provided else uiRoot
+  const container = overlayRoot || uiRoot || document.body;
+  try {
+    // ensure overlayRoot accepts pointer events and sits above canvas
+    if (overlayRoot) {
+      overlayRoot.style.pointerEvents = 'auto';
+      overlayRoot.style.zIndex = '10000';
+      // make overlayRoot positioned so absolutely-positioned children can align (if not already)
+      const cs = getComputedStyle(overlayRoot);
+      if (cs.position === 'static') overlayRoot.style.position = 'fixed';
+    }
+    container.appendChild(topLog);
+    container.appendChild(root);
+  } catch (e) {
+    // fallback: append to body
+    document.body.appendChild(topLog);
+    document.body.appendChild(root);
+  }
 
   function logTop(msg) {
     const d = createEl('div');
@@ -55,27 +75,28 @@ export function initEnhancements({
     setTimeout(()=>{ try { d.remove(); } catch(e){} }, 8000);
   }
 
-  // helper to toggle core UI elements passed by integrator
+  // core UI elements to hide/show (panel, log, auto buttons)
   const corePanel = coreUiElements.panel || null;
   const coreLog = coreUiElements.log || null;
   const coreButtons = Array.isArray(coreUiElements.autoButtons) ? coreUiElements.autoButtons.slice() : [];
 
+  // toggle action
   btnToggle.addEventListener('click', () => {
-    // keep the toggle button itself visible — hide other hidable UI
+    // toggle hidable elements inside our UI
     document.documentElement.classList.toggle('ui-hidden');
-    // additionally toggle core UI if provided
+    // hide/show core elements if provided
     if (corePanel) corePanel.classList.toggle('hidden-by-enh');
     if (coreLog) coreLog.classList.toggle('hidden-by-enh');
     coreButtons.forEach(b => { if (b) b.classList.toggle('hidden-by-enh'); });
-    // also hide our own top log when toggled
+    // also hide/show our topLog
     topLog.classList.toggle('hidden-by-enh');
     logTop('UI トグル');
   });
 
-  // --- Screenshot implementation ---
+  // screenshot helpers (works in AR because UI lives inside overlayRoot)
   async function screenshotFromRenderer() {
     if (!renderer) throw new Error('renderer not provided');
-    // hide UI briefly
+    // hide UI: hide hidable children but keep toggle visible
     document.documentElement.classList.add('ui-hidden');
     if (corePanel) corePanel.classList.add('hidden-by-enh');
     if (coreLog) coreLog.classList.add('hidden-by-enh');
@@ -96,6 +117,7 @@ export function initEnhancements({
       for (let i=0;i<n;i++) u8[i]=bstr.charCodeAt(i);
       blob = new Blob([u8], { type: mime });
     }
+    // restore UI
     document.documentElement.classList.remove('ui-hidden');
     if (corePanel) corePanel.classList.remove('hidden-by-enh');
     if (coreLog) coreLog.classList.remove('hidden-by-enh');
@@ -151,18 +173,15 @@ export function initEnhancements({
     }
   });
 
-  // --- Gesture handling for model scale/rotation ---
+  // Gesture handling: prefer overlayRoot for event target (works in AR overlay), else renderer.domElement
   if (!getPlacedObject || typeof getPlacedObject !== 'function') {
     logTop('ジェスチャー: getPlacedObject 関数が未提供。スワイプ/ピンチは無効。');
   } else {
-    // ensure renderer dom element is prioritized and touchAction disabled
-    if (renderer && renderer.domElement) {
-      try {
-        renderer.domElement.style.touchAction = 'none';
-        renderer.domElement.style.userSelect = 'none';
-      } catch (e) {}
-    }
-    const el = renderer && renderer.domElement ? renderer.domElement : (modelViewerEl || document.body);
+    // ensure touchAction disabled on chosen element if possible
+    const eventTarget = overlayRoot || (renderer && renderer.domElement) || modelViewerEl || document.body;
+    try { eventTarget.style.touchAction = 'none'; } catch(e){}
+    try { if (renderer && renderer.domElement) { renderer.domElement.style.touchAction = 'none'; renderer.domElement.style.userSelect='none'; } } catch(e){}
+
     const pointers = new Map();
     let gestureState = { mode: 'none', startX:0, startY:0, startDist:0, startScale:1, startRotationY:0 };
 
@@ -179,23 +198,17 @@ export function initEnhancements({
     }
 
     function onPointerDown(e){
-      // only left mouse button
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      // prefer setting capture on el (renderer.domElement) to ensure we get move/up
-      trySetPointerCapture(el, e.pointerId);
-      // also try event target
+      // capture on eventTarget first
+      trySetPointerCapture(eventTarget, e.pointerId);
       try { if (e.target && typeof e.target.setPointerCapture === 'function') e.target.setPointerCapture(e.pointerId); } catch(e){}
       pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
       const placed = getPlacedObject();
-      if (!placed) {
-        // nothing to manipulate
-        return;
-      }
+      if (!placed) return;
       if (pointers.size === 1) {
         gestureState.mode = 'rotate';
         const p = pointers.values().next().value;
         gestureState.startX = p.x; gestureState.startY = p.y;
-        // store initial rotation (Y axis)
         gestureState.startRotationY = (placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
       } else if (pointers.size === 2) {
         gestureState.mode = 'pinch';
@@ -216,9 +229,8 @@ export function initEnhancements({
       if (gestureState.mode === 'rotate' && pointers.size === 1) {
         const p = pointers.values().next().value;
         const dx = p.x - gestureState.startX;
-        const ROT_SPEED = 0.008; // tuned sensitivity
+        const ROT_SPEED = 0.008;
         const newY = gestureState.startRotationY - dx * ROT_SPEED;
-        // if model uses quaternion, set rotation via euler
         if (placed.rotation) {
           placed.rotation.y = newY;
         } else if (placed.quaternion) {
@@ -234,11 +246,7 @@ export function initEnhancements({
           if (placed.scale) {
             placed.scale.setScalar(newScale);
           } else {
-            // if no scale, try wrapping object in a parent or set scale on children
-            // fallback: attempt to set scale on children uniformly
-            try {
-              placed.traverse((c) => { if (c.isMesh) c.scale.setScalar(newScale); });
-            } catch (err) {}
+            try { placed.traverse((c) => { if (c.isMesh) c.scale.setScalar(newScale); }); } catch (err) {}
           }
         }
       }
@@ -246,7 +254,7 @@ export function initEnhancements({
 
     function onPointerUp(e){
       try {
-        if (el && typeof el.releasePointerCapture === 'function') el.releasePointerCapture(e.pointerId);
+        if (eventTarget && typeof eventTarget.releasePointerCapture === 'function') eventTarget.releasePointerCapture(e.pointerId);
       } catch(e){}
       try { if (e.target && typeof e.target.releasePointerCapture === 'function') e.target.releasePointerCapture(e.pointerId); } catch(e){}
       pointers.delete(e.pointerId);
@@ -260,14 +268,14 @@ export function initEnhancements({
       }
     }
 
-    el.addEventListener('pointerdown', onPointerDown, { passive:false });
-    el.addEventListener('pointermove', onPointerMove, { passive:false });
-    el.addEventListener('pointerup', onPointerUp, { passive:false });
-    el.addEventListener('pointercancel', onPointerUp, { passive:false });
-    // prevent page scroll while interacting on touch
-    el.addEventListener('touchstart', (ev)=>{ /* no-op - prevents passive scrolling if passive:false */ }, { passive:false });
+    // add listeners to eventTarget (overlayRoot preferred)
+    eventTarget.addEventListener('pointerdown', onPointerDown, { passive:false });
+    eventTarget.addEventListener('pointermove', onPointerMove, { passive:false });
+    eventTarget.addEventListener('pointerup', onPointerUp, { passive:false });
+    eventTarget.addEventListener('pointercancel', onPointerUp, { passive:false });
+    eventTarget.addEventListener('touchstart', (ev)=>{}, { passive:false });
 
-    logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転)');
+    logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転) — events attached to ' + (overlayRoot ? '#overlay' : (renderer && renderer.domElement ? 'renderer.domElement' : 'document.body')));
   }
 
   // public handle
