@@ -1,5 +1,7 @@
 // js/webar-enhancements.js
-export function initEnhancements({
+// Gesture + UI enhancements with dynamic XR session switching.
+
+export async function initEnhancements({
   renderer = null,
   camera = null,
   getPlacedObject = null,
@@ -8,6 +10,7 @@ export function initEnhancements({
   overlayRoot = null,
   coreUiElements = {}
 } = {}) {
+
   function createEl(tag, cls, html) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -15,6 +18,7 @@ export function initEnhancements({
     return e;
   }
 
+  // inject CSS
   if (!document.getElementById('webar-enh-style')) {
     const style = createEl('style', '', `
       #webar-ui { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); z-index: 10001; display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
@@ -27,6 +31,7 @@ export function initEnhancements({
     document.head.appendChild(style);
   }
 
+  // build UI
   const root = createEl('div', '');
   root.id = 'webar-ui';
   root.style.pointerEvents = 'auto';
@@ -41,10 +46,11 @@ export function initEnhancements({
   topLog.id = 'webar-top-log';
   topLog.style.pointerEvents = 'auto';
 
+  // append to overlayRoot if available, else to uiRoot
   const container = overlayRoot || uiRoot || document.body;
   try {
     if (overlayRoot) {
-      // keep overlayRoot pointer-events none so canvas receives gestures; UI children have pointer-events:auto
+      // keep overlayRoot default pointer-events none so canvas receives gestures in non-XR mode
       try { overlayRoot.style.pointerEvents = 'none'; } catch(e){}
       try { if (getComputedStyle(overlayRoot).position === 'static') overlayRoot.style.position = 'fixed'; } catch(e){}
     }
@@ -123,7 +129,6 @@ export function initEnhancements({
       if (renderer && renderer.domElement) {
         blob = await screenshotFromRenderer();
       } else if (modelViewerEl) {
-        // fallback: model-viewer screenshot not guaranteed
         logTop('model-viewer screenshot not available in this environment');
       }
       if (!blob) throw new Error('スクリーンショット失敗 (適切な描画領域が見つかりません)');
@@ -135,115 +140,153 @@ export function initEnhancements({
     }
   });
 
-  // Gesture handling: prefer renderer.domElement first (so gestures hit the canvas), fallback overlayRoot
-  if (!getPlacedObject || typeof getPlacedObject !== 'function') {
-    logTop('ジェスチャー: getPlacedObject 関数が未提供。スワイプ/ピンチは無効。');
-  } else {
-    // choose event target: prefer canvas so events reach it even when overlayRoot is pointer-events:none
-    const eventTarget = (renderer && renderer.domElement) ? renderer.domElement : (overlayRoot || modelViewerEl || document.body);
-    try { eventTarget.style.touchAction = 'none'; } catch(e){}
-    try { if (renderer && renderer.domElement) { renderer.domElement.style.touchAction = 'none'; renderer.domElement.style.userSelect='none'; } } catch(e){}
+  // ==== Gesture handling code with dynamic event target switching ====
+  // We'll attach listeners to a "currentTarget" and provide setXRSession(session) to switch.
+  let currentTarget = null;
+  let listenersAttached = false;
 
-    const pointers = new Map();
-    let gestureState = { mode: 'none', startX:0, startY:0, startDist:0, startScale:1, startRotationY:0 };
+  // named handlers so we can remove them later
+  const pointers = new Map();
+  let gestureState = { mode: 'none', startX:0, startY:0, startDist:0, startScale:1, startRotationY:0 };
 
-    function getDistance(p1,p2){ const dx=p2.x-p1.x, dy=p2.y-p1.y; return Math.hypot(dx,dy); }
+  function getDistance(a,b){ const dx=b.x-a.x, dy=b.y-a.y; return Math.hypot(dx,dy); }
 
-    function trySetPointerCapture(target, id) {
-      try {
-        if (target && typeof target.setPointerCapture === 'function') {
-          target.setPointerCapture(id);
-          return true;
-        }
-      } catch(e){}
-      return false;
-    }
-
-    function onPointerDown(e){
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      trySetPointerCapture(eventTarget, e.pointerId);
-      try { if (e.target && typeof e.target.setPointerCapture === 'function') e.target.setPointerCapture(e.pointerId); } catch(e){}
-      pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
-      const placed = getPlacedObject();
-      if (!placed) return;
-      if (pointers.size === 1) {
-        gestureState.mode = 'rotate';
-        const p = pointers.values().next().value;
-        gestureState.startX = p.x; gestureState.startY = p.y;
-        gestureState.startRotationY = (placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
-      } else if (pointers.size === 2) {
-        gestureState.mode = 'pinch';
-        const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
-        gestureState.startDist = getDistance(pA,pB);
-        gestureState.startScale = placed && placed.scale ? placed.scale.x : 1;
-      } else {
-        gestureState.mode = 'none';
-      }
-    }
-
-    function onPointerMove(e){
-      if (!pointers.has(e.pointerId)) return;
-      pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
-      const placed = getPlacedObject();
-      if (!placed) return;
-      if (gestureState.mode === 'rotate' && pointers.size === 1) {
-        const p = pointers.values().next().value;
-        const dx = p.x - gestureState.startX;
-        const ROT_SPEED = 0.008;
-        const newY = gestureState.startRotationY - dx * ROT_SPEED;
-        if (placed.rotation) {
-          placed.rotation.y = newY;
-        } else if (placed.quaternion) {
-          const eul = new THREE.Euler(0, newY, 0);
-          placed.quaternion.setFromEuler(eul);
-        }
-      } else if (gestureState.mode === 'pinch' && pointers.size === 2) {
-        const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
-        const curDist = getDistance(pA,pB);
-        if (gestureState.startDist > 0) {
-          const ratio = curDist / gestureState.startDist;
-          const newScale = Math.max(0.05, Math.min(8, gestureState.startScale * ratio));
-          if (placed.scale) {
-            placed.scale.setScalar(newScale);
-          } else {
-            try { placed.traverse((c) => { if (c.isMesh) c.scale.setScalar(newScale); }); } catch (err) {}
-          }
-        }
-      }
-    }
-
-    function onPointerUp(e){
-      try {
-        if (eventTarget && typeof eventTarget.releasePointerCapture === 'function') eventTarget.releasePointerCapture(e.pointerId);
-      } catch(e){}
-      try { if (e.target && typeof e.target.releasePointerCapture === 'function') e.target.releasePointerCapture(e.pointerId); } catch(e){}
-      pointers.delete(e.pointerId);
-      if (pointers.size === 0) gestureState.mode = 'none';
-      else if (pointers.size === 1) {
-        const p = pointers.values().next().value;
-        gestureState.mode = 'rotate';
-        gestureState.startX = p.x; gestureState.startY = p.y;
-        const placed = getPlacedObject();
-        gestureState.startRotationY = (placed && placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed && placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
-      }
-    }
-
-    eventTarget.addEventListener('pointerdown', onPointerDown, { passive:false });
-    eventTarget.addEventListener('pointermove', onPointerMove, { passive:false });
-    eventTarget.addEventListener('pointerup', onPointerUp, { passive:false });
-    eventTarget.addEventListener('pointercancel', onPointerUp, { passive:false });
-    eventTarget.addEventListener('touchstart', (ev)=>{}, { passive:false });
-
-    logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転) — events attached to ' + ( (renderer && renderer.domElement) ? 'renderer.domElement' : (overlayRoot ? '#overlay' : 'document.body') ));
+  function trySetPointerCapture(target, id){
+    try { if (target && typeof target.setPointerCapture === 'function') { target.setPointerCapture(id); return true; } } catch(e){} return false;
   }
 
+  function onPointerDown(e){
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    trySetPointerCapture(currentTarget, e.pointerId);
+    try { if (e.target && typeof e.target.setPointerCapture === 'function') e.target.setPointerCapture(e.pointerId); } catch(e){}
+    pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
+    const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
+    if (!placed) return;
+    if (pointers.size === 1) {
+      gestureState.mode='rotate';
+      const p = pointers.values().next().value;
+      gestureState.startX=p.x; gestureState.startY=p.y;
+      gestureState.startRotationY = (placed.rotation && typeof placed.rotation.y==='number') ? placed.rotation.y : (placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
+    } else if (pointers.size===2) {
+      gestureState.mode='pinch';
+      const it = pointers.values(); const pA = it.next().value, pB = it.next().value;
+      gestureState.startDist = getDistance(pA,pB);
+      gestureState.startScale = placed && placed.scale ? placed.scale.x : 1;
+    } else {
+      gestureState.mode='none';
+    }
+  }
+
+  function onPointerMove(e){
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
+    const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
+    if (!placed) return;
+    if (gestureState.mode==='rotate' && pointers.size===1) {
+      const p = pointers.values().next().value;
+      const dx = p.x - gestureState.startX;
+      const ROT_SPEED = 0.008;
+      const newY = gestureState.startRotationY - dx * ROT_SPEED;
+      if (placed.rotation) placed.rotation.y = newY;
+      else if (placed.quaternion) { const eul = new THREE.Euler(0,newY,0); placed.quaternion.setFromEuler(eul); }
+    } else if (gestureState.mode==='pinch' && pointers.size===2) {
+      const it = pointers.values(); const pA = it.next().value, pB = it.next().value;
+      const curDist = getDistance(pA,pB);
+      if (gestureState.startDist>0) {
+        const ratio = curDist / gestureState.startDist;
+        const newScale = Math.max(0.05, Math.min(8, gestureState.startScale * ratio));
+        if (placed.scale) placed.scale.setScalar(newScale);
+        else { try { placed.traverse((c)=>{ if (c.isMesh) c.scale.setScalar(newScale); }); } catch(e){} }
+      }
+    }
+  }
+
+  function onPointerUp(e){
+    try { if (currentTarget && typeof currentTarget.releasePointerCapture === 'function') currentTarget.releasePointerCapture(e.pointerId); } catch(e){}
+    try { if (e.target && typeof e.target.releasePointerCapture === 'function') e.target.releasePointerCapture(e.pointerId); } catch(e){}
+    pointers.delete(e.pointerId);
+    if (pointers.size===0) gestureState.mode='none';
+    else if (pointers.size===1) {
+      const p = pointers.values().next().value;
+      gestureState.mode='rotate';
+      gestureState.startX=p.x; gestureState.startY=p.y;
+      const placed = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
+      gestureState.startRotationY = (placed && placed.rotation && typeof placed.rotation.y==='number') ? placed.rotation.y : (placed && placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
+    }
+  }
+
+  function addListenersTo(target){
+    if (!target || listenersAttached) return;
+    currentTarget = target;
+    try { target.style.touchAction = 'none'; } catch(e){}
+    target.addEventListener('pointerdown', onPointerDown, { passive:false });
+    target.addEventListener('pointermove', onPointerMove, { passive:false });
+    target.addEventListener('pointerup', onPointerUp, { passive:false });
+    target.addEventListener('pointercancel', onPointerUp, { passive:false });
+    target.addEventListener('lostpointercapture', (ev)=> { pointers.delete(ev.pointerId); }, { passive:true });
+    listenersAttached = true;
+    logTop('ジェスチャー listeners added to ' + (target.id ? '#'+target.id : target.tagName || 'target'));
+  }
+
+  function removeListenersFrom(target){
+    if (!target || !listenersAttached) return;
+    try {
+      target.removeEventListener('pointerdown', onPointerDown);
+      target.removeEventListener('pointermove', onPointerMove);
+      target.removeEventListener('pointerup', onPointerUp);
+      target.removeEventListener('pointercancel', onPointerUp);
+      // lostpointercapture removal not trivial as it was added with lambda; ignore
+    } catch(e){}
+    listenersAttached = false;
+    currentTarget = null;
+    pointers.clear();
+    gestureState.mode='none';
+  }
+
+  // initial binding: prefer renderer.domElement (non-XR mode)
+  if (renderer && renderer.domElement) {
+    addListenersTo(renderer.domElement);
+  } else if (overlayRoot) {
+    addListenersTo(overlayRoot);
+  } else {
+    addListenersTo(document.body);
+  }
+
+  // API to switch binding when XR session starts/ends
+  function setXRSession(session){
+    // if session present, use overlayRoot (it will be visible as DOM overlay)
+    if (session) {
+      // remove existing
+      if (currentTarget) removeListenersFrom(currentTarget);
+      // enable overlayRoot pointer-events so it will receive events in XR
+      if (overlayRoot) {
+        try { overlayRoot.style.pointerEvents = 'auto'; } catch(e){}
+        addListenersTo(overlayRoot);
+      } else if (renderer && renderer.domElement) {
+        addListenersTo(renderer.domElement);
+      } else {
+        addListenersTo(document.body);
+      }
+      logTop('XR session active: gestures bound to overlay/document');
+    } else {
+      // session ended -> ensure overlayRoot returns to pointer-events:none (so canvas receives events outside XR)
+      if (currentTarget) removeListenersFrom(currentTarget);
+      if (overlayRoot) try { overlayRoot.style.pointerEvents = 'none'; } catch(e){}
+      if (renderer && renderer.domElement) addListenersTo(renderer.domElement);
+      else addListenersTo(document.body);
+      logTop('XR session inactive: gestures bound to canvas/document');
+    }
+  }
+
+  // return control object
   return {
     uiRoot: root,
     btnToggle,
     btnScreenshot,
     logTop,
+    setXRSession,
     destroy(){
-      try{ root.remove(); topLog.remove(); }catch(e){}
+      try { if (currentTarget) removeListenersFrom(currentTarget); root.remove(); topLog.remove(); } catch(e){}
     }
   };
 }
