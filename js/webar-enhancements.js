@@ -1,7 +1,4 @@
 // js/webar-enhancements.js
-// Provides UI toggle + Screenshot + Pinch scale + Swipe rotate for Three.Object3D placed in the scene.
-// Usage: initEnhancements({ renderer, camera, getPlacedObject, modelViewerEl, uiRoot, overlayRoot, coreUiElements })
-
 export function initEnhancements({
   renderer = null,
   camera = null,
@@ -18,12 +15,10 @@ export function initEnhancements({
     return e;
   }
 
-  // inject CSS once
   if (!document.getElementById('webar-enh-style')) {
     const style = createEl('style', '', `
       #webar-ui { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); z-index: 10001; display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
       #webar-ui .webar-btn { background: rgba(0,0,0,0.6); color:#fff; border:1px solid rgba(255,255,255,0.08); padding:8px 10px; border-radius:8px; font-size:14px; }
-      #webar-ui .webar-btn.ghost { background:transparent; border:1px dashed rgba(255,255,255,0.12); }
       #webar-top-log { position: absolute; left: 12px; top: 12px; z-index: 10001; max-width: 60%; pointer-events:auto; color:#fff; font-size:13px; }
       .ui-hidden #webar-ui > .hidable { display:none !important; }
       .hidden-by-enh { display:none !important; }
@@ -32,15 +27,12 @@ export function initEnhancements({
     document.head.appendChild(style);
   }
 
-  // build UI
   const root = createEl('div', '');
   root.id = 'webar-ui';
-  // ensure UI itself accepts pointer events
   root.style.pointerEvents = 'auto';
   const btnToggle = createEl('button', 'webar-btn', 'UI 表示/非表示');
   const hidableWrapper = createEl('div', 'hidable', '');
   const btnScreenshot = createEl('button', 'webar-btn', 'スクリーンショット');
-  btnScreenshot.title = '表示中の画面を保存します（Quick Look中は制約あり）';
   hidableWrapper.appendChild(btnScreenshot);
   root.appendChild(btnToggle);
   root.appendChild(hidableWrapper);
@@ -49,12 +41,10 @@ export function initEnhancements({
   topLog.id = 'webar-top-log';
   topLog.style.pointerEvents = 'auto';
 
-  // choose container: overlayRoot if provided else uiRoot
   const container = overlayRoot || uiRoot || document.body;
   try {
-    // If overlayRoot provided, ensure overlayRoot stays pointer-events:none so clicks fall through,
-    // but UI children (root/topLog) will have pointer-events:auto so they still get interactions.
     if (overlayRoot) {
+      // keep overlayRoot pointer-events none so canvas receives gestures; UI children have pointer-events:auto
       try { overlayRoot.style.pointerEvents = 'none'; } catch(e){}
       try { if (getComputedStyle(overlayRoot).position === 'static') overlayRoot.style.position = 'fixed'; } catch(e){}
     }
@@ -85,10 +75,8 @@ export function initEnhancements({
     logTop('UI トグル');
   });
 
-  // screenshot helpers
   async function screenshotFromRenderer() {
     if (!renderer) throw new Error('renderer not provided');
-    // hide UI (but we keep toggle visible by class manipulation)
     document.documentElement.classList.add('ui-hidden');
     if (corePanel) corePanel.classList.add('hidden-by-enh');
     if (coreLog) coreLog.classList.add('hidden-by-enh');
@@ -116,24 +104,6 @@ export function initEnhancements({
     return blob;
   }
 
-  async function screenshotFromModelViewer(mv) {
-    if (!mv) throw new Error('model-viewer element required');
-    if (typeof mv.toBlob === 'function') {
-      return await mv.toBlob();
-    }
-    if (typeof mv.toDataURL === 'function') {
-      const data = mv.toDataURL();
-      const arr = data.split(',');
-      const mime = arr[0].match(/:(.*?);/)[1];
-      const bstr = atob(arr[1]);
-      const n = bstr.length;
-      const u8 = new Uint8Array(n);
-      for (let i=0;i<n;i++) u8[i]=bstr.charCodeAt(i);
-      return new Blob([u8], { type: mime });
-    }
-    throw new Error('model-viewer does not expose screenshot API in this environment');
-  }
-
   async function downloadBlob(blob, filename='screenshot.png') {
     if (!blob) throw new Error('no blob');
     const url = URL.createObjectURL(blob);
@@ -153,7 +123,8 @@ export function initEnhancements({
       if (renderer && renderer.domElement) {
         blob = await screenshotFromRenderer();
       } else if (modelViewerEl) {
-        try { blob = await screenshotFromModelViewer(modelViewerEl); } catch(e){ console.warn(e); }
+        // fallback: model-viewer screenshot not guaranteed
+        logTop('model-viewer screenshot not available in this environment');
       }
       if (!blob) throw new Error('スクリーンショット失敗 (適切な描画領域が見つかりません)');
       await downloadBlob(blob, 'webar_screenshot.png');
@@ -164,11 +135,12 @@ export function initEnhancements({
     }
   });
 
-  // Gesture handling: prefer overlayRoot for event target (works in AR overlay), else renderer.domElement
+  // Gesture handling: prefer renderer.domElement first (so gestures hit the canvas), fallback overlayRoot
   if (!getPlacedObject || typeof getPlacedObject !== 'function') {
     logTop('ジェスチャー: getPlacedObject 関数が未提供。スワイプ/ピンチは無効。');
   } else {
-    const eventTarget = overlayRoot || (renderer && renderer.domElement) || modelViewerEl || document.body;
+    // choose event target: prefer canvas so events reach it even when overlayRoot is pointer-events:none
+    const eventTarget = (renderer && renderer.domElement) ? renderer.domElement : (overlayRoot || modelViewerEl || document.body);
     try { eventTarget.style.touchAction = 'none'; } catch(e){}
     try { if (renderer && renderer.domElement) { renderer.domElement.style.touchAction = 'none'; renderer.domElement.style.userSelect='none'; } } catch(e){}
 
@@ -203,7 +175,6 @@ export function initEnhancements({
         gestureState.mode = 'pinch';
         const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
         gestureState.startDist = getDistance(pA,pB);
-        const placed = getPlacedObject();
         gestureState.startScale = placed && placed.scale ? placed.scale.x : 1;
       } else {
         gestureState.mode = 'none';
@@ -223,8 +194,8 @@ export function initEnhancements({
         if (placed.rotation) {
           placed.rotation.y = newY;
         } else if (placed.quaternion) {
-          const e = new THREE.Euler(0, newY, 0);
-          placed.quaternion.setFromEuler(e);
+          const eul = new THREE.Euler(0, newY, 0);
+          placed.quaternion.setFromEuler(eul);
         }
       } else if (gestureState.mode === 'pinch' && pointers.size === 2) {
         const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
@@ -263,7 +234,7 @@ export function initEnhancements({
     eventTarget.addEventListener('pointercancel', onPointerUp, { passive:false });
     eventTarget.addEventListener('touchstart', (ev)=>{}, { passive:false });
 
-    logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転) — events attached to ' + (overlayRoot ? '#overlay' : (renderer && renderer.domElement ? 'renderer.domElement' : 'document.body')));
+    logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転) — events attached to ' + ( (renderer && renderer.domElement) ? 'renderer.domElement' : (overlayRoot ? '#overlay' : 'document.body') ));
   }
 
   return {
