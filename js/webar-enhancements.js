@@ -1,12 +1,6 @@
 // js/webar-enhancements.js
-// Usage: call initEnhancements(options) after your AR page has created renderer/camera/scene or model-viewer.
-// options: {
-//   renderer: THREE.WebGLRenderer (optional, for three.js preview and AR canvas screenshot/gestures),
-//   camera: THREE.Camera (optional, for possible camera-relative behaviors),
-//   getPlacedObject: ()=>THREE.Object3D|null (function; should return the currently placed model in scene),
-//   modelViewerEl: HTMLElement (optional; <model-viewer> element if used on page),
-//   uiRoot: HTMLElement (optional) - parent where to append buttons (defaults document.body)
-// }
+// Provides UI toggle + Screenshot + Pinch scale + Swipe rotate for Three.Object3D placed in the scene.
+// Usage: initEnhancements({ renderer, camera, getPlacedObject, modelViewerEl, uiRoot })
 
 export function initEnhancements({
   renderer = null,
@@ -29,9 +23,7 @@ export function initEnhancements({
       #webar-ui { position: fixed; right: 12px; top: 50%; transform: translateY(-50%); z-index: 99999; display:flex; flex-direction:column; gap:8px; pointer-events:auto; }
       #webar-ui .webar-btn { background: rgba(0,0,0,0.6); color:#fff; border:1px solid rgba(255,255,255,0.08); padding:8px 10px; border-radius:8px; font-size:14px; }
       #webar-ui .webar-btn.ghost { background:transparent; border:1px dashed rgba(255,255,255,0.12); }
-      /* top log reposition (if present on page) */
       #webar-top-log { position: fixed; left: 12px; top: 12px; z-index: 99999; max-width: 60%; pointer-events:none; color:#fff; font-size:13px; }
-      /* hide UI when .ui-hidden is set on html/doc */
       .ui-hidden #webar-ui > .hidable { display:none !important; }
     `);
     style.id = 'webar-enh-style';
@@ -41,9 +33,7 @@ export function initEnhancements({
   // --- build UI ---
   const root = createEl('div', '');
   root.id = 'webar-ui';
-  // persistent toggle (must remain visible to re-show)
   const btnToggle = createEl('button', 'webar-btn', 'UI 表示/非表示');
-  // hidable area
   const hidableWrapper = createEl('div', 'hidable', '');
   const btnScreenshot = createEl('button', 'webar-btn', 'スクリーンショット');
   btnScreenshot.title = '表示中の画面を保存します（Quick Look中は制約あり）';
@@ -52,7 +42,6 @@ export function initEnhancements({
   root.appendChild(btnToggle);
   root.appendChild(hidableWrapper);
 
-  // optional top log
   const topLog = createEl('div', 'webar-top-log');
   topLog.id = 'webar-top-log';
   uiRoot.appendChild(topLog);
@@ -65,7 +54,6 @@ export function initEnhancements({
     setTimeout(()=>{ try { d.remove(); } catch(e){} }, 8000);
   }
 
-  // toggle show/hide
   btnToggle.addEventListener('click', () => {
     document.documentElement.classList.toggle('ui-hidden');
     logTop('UI トグル');
@@ -74,19 +62,20 @@ export function initEnhancements({
   // --- Screenshot implementation ---
   async function screenshotFromRenderer() {
     if (!renderer) throw new Error('renderer not provided');
-    // hide UI briefly
     document.documentElement.classList.add('ui-hidden');
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
-    // try toBlob
     const canvas = renderer.domElement;
     let blob = null;
     if (canvas.toBlob) {
       blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
     } else {
-      // fallback to toDataURL
       const data = canvas.toDataURL('image/png');
-      const arr = data.split(','), mime = arr[0].match(/:(.*?);/)[1], bstr = atob(arr[1]), n = bstr.length, u8 = new Uint8Array(n);
+      const arr = data.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      const n = bstr.length;
+      const u8 = new Uint8Array(n);
       for (let i=0;i<n;i++) u8[i]=bstr.charCodeAt(i);
       blob = new Blob([u8], { type: mime });
     }
@@ -95,16 +84,17 @@ export function initEnhancements({
   }
 
   async function screenshotFromModelViewer(mv) {
-    // Model Viewer exposes screenshot APIs (toBlob/toDataURL) per docs; try toBlob then toDataURL fallback.
-    // Reference: model-viewer docs - toDataURL / toBlob exist. :contentReference[oaicite:4]{index=4}
     if (!mv) throw new Error('model-viewer element required');
-    // Prefer toBlob (if available)
     if (typeof mv.toBlob === 'function') {
       return await mv.toBlob();
     }
     if (typeof mv.toDataURL === 'function') {
       const data = mv.toDataURL();
-      const arr = data.split(','), mime = arr[0].match(/:(.*?);/)[1], bstr = atob(arr[1]), n = bstr.length, u8 = new Uint8Array(n);
+      const arr = data.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      const n = bstr.length;
+      const u8 = new Uint8Array(n);
       for (let i=0;i<n;i++) u8[i]=bstr.charCodeAt(i);
       return new Blob([u8], { type: mime });
     }
@@ -127,7 +117,6 @@ export function initEnhancements({
     logTop('スクリーンショット開始...');
     try {
       let blob = null;
-      // priority: renderer canvas (Three.js) -> model-viewer -> fallback: HTML element capture (not implemented)
       if (renderer && renderer.domElement) {
         blob = await screenshotFromRenderer();
       } else if (modelViewerEl) {
@@ -143,18 +132,12 @@ export function initEnhancements({
   });
 
   // --- Gesture handling for model scale/rotation ---
-  // Works by calling getPlacedObject() to obtain current model object (THREE.Object3D).
-  // getPlacedObject must be provided by integrator code and return the currently interactable object (or null).
   if (!getPlacedObject || typeof getPlacedObject !== 'function') {
     logTop('ジェスチャー: getPlacedObject 関数が未提供。スワイプ/ピンチは無効。');
   } else {
     const el = renderer && renderer.domElement ? renderer.domElement : (modelViewerEl || document.body);
-    // pointer-based gesture state
     const pointers = new Map();
-    let gestureState = {
-      mode: 'none', // 'none' | 'rotate' | 'pinch'
-      startX:0, startY:0, startDist:0, startScale:1, startRotationY:0
-    };
+    let gestureState = { mode: 'none', startX:0, startY:0, startDist:0, startScale:1, startRotationY:0 };
 
     function getDistance(p1,p2){ const dx=p2.x-p1.x, dy=p2.y-p1.y; return Math.hypot(dx,dy); }
 
@@ -185,7 +168,7 @@ export function initEnhancements({
       if (gestureState.mode === 'rotate' && pointers.size === 1) {
         const p = pointers.values().next().value;
         const dx = p.x - gestureState.startX;
-        const ROT_SPEED = 0.01; // adjust sensitivity
+        const ROT_SPEED = 0.01;
         const newY = gestureState.startRotationY - dx * ROT_SPEED;
         if (placed.rotation) placed.rotation.y = newY;
       } else if (gestureState.mode === 'pinch' && pointers.size === 2) {
@@ -215,13 +198,12 @@ export function initEnhancements({
     el.addEventListener('pointermove', onPointerMove, { passive:false });
     el.addEventListener('pointerup', onPointerUp, { passive:false });
     el.addEventListener('pointercancel', onPointerUp, { passive:false });
-    // prevent page scrolling while interacting
-    el.addEventListener('touchstart', (ev)=>{ /* only if interacting on canvas */ }, { passive:false });
+    el.addEventListener('touchstart', (ev)=>{}, { passive:false });
 
     logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転)');
   }
 
-  // return programmatic handle
+  // public handle
   return {
     uiRoot: root,
     btnToggle,
