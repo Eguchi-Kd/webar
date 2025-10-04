@@ -13,6 +13,8 @@
     #log { max-height:220px; overflow:auto; font-size:12px; margin-top:8px; background:rgba(255,255,255,0.02); padding:6px; border-radius:6px; }
     button { padding:8px 10px; margin-right:6px; margin-top:6px; }
     #overlay { position:absolute; inset:0; pointer-events:none; z-index:1000; }
+    /* small helper for when enhancements toggle hides panel */
+    .hidden-by-enh { display:none !important; }
   </style>
 </head>
 <body>
@@ -141,6 +143,9 @@
   const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
+  // ensure pointer events on canvas are usable for gestures
+  renderer.domElement.style.touchAction = 'none';
+  renderer.domElement.style.userSelect = 'none';
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType('local');
   document.body.appendChild(renderer.domElement);
@@ -266,6 +271,26 @@
     try {
       const modelUrlToLoad = vrmExists ? vrmUrl : (glbExists ? glbUrl : null);
       if (!modelUrlToLoad) { setError('No model available to place in AR'); return; }
+
+      // If a model was previously placed, move it to the new reticle position rather than adding another model.
+      if (placedModel) {
+        // decompose reticle transform and apply to placedModel (preserve scale multiplication factor)
+        const newPos = new THREE.Vector3();
+        const newQuat = new THREE.Quaternion();
+        const newScale = new THREE.Vector3();
+        reticle.matrix.decompose(newPos, newQuat, newScale);
+        // apply position & rotation; keep existing scale multiplied by ratio if needed
+        placedModel.position.copy(newPos);
+        placedModel.quaternion.copy(newQuat);
+        // Optionally adjust scale: keep existing scale but ensure it's not 0
+        if (!placedModel.scale || placedModel.scale.length() === 0) placedModel.scale.setScalar(0.1);
+        setStatus('Moved existing model to new position (no new model added)');
+        log('Moved existing placedModel to new reticle position');
+        reticle.visible = false;
+        return;
+      }
+
+      // no existing model: load and add
       const gltf = await loader.loadAsync(modelUrlToLoad);
       if (THREE.VRMUtils) THREE.VRMUtils.removeUnnecessaryJoints(gltf.scene);
       const maybeVrm = await THREE.VRM.from(gltf).catch(()=>null);
@@ -279,7 +304,7 @@
       // set as placedModel so gestures will affect this placed AR object when possible
       placedModel = obj;
       reticle.visible = false;
-      log('model placed into AR scene (placedModel set)');
+      log('model placed into AR scene (new placedModel set)');
     } catch(e){
       setError('Model load/place failed: ' + e);
     }
@@ -370,7 +395,13 @@
       camera: camera,
       getPlacedObject: () => placedModel,
       modelViewerEl: mv,
-      uiRoot: document.body
+      uiRoot: document.body,
+      // pass optional hooks so enhancements can toggle core UI elements
+      coreUiElements: {
+        panel: document.getElementById('panel'),
+        log: document.getElementById('log'),
+        autoButtons: [document.getElementById('btnAuto'), document.getElementById('btnForceWebXR'), document.getElementById('btnForceQuickLook')]
+      }
     });
     log('webar-enhancements initialized');
   } catch (e) {
