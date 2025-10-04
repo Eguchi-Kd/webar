@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>WebAR auto-detect VRM support</title>
+  <title>WebAR auto-detect VRM support (enhanced)</title>
   <style>
     html,body { height:100%; margin:0; font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; background:#000; color:#fff; }
     #panel {
@@ -94,7 +94,7 @@
       if (r.ok) return true;
       // fallback try range GET for servers that disallow HEAD
       if (r.status === 405 || r.status === 403) {
-        const r2 = await fetch(url, { method: 'GET', headers: { Range: 'bytes=0-0' }});
+        const r2 = await fetch(url, { method: 'GET', headers: { Range: 'bytes=0-0' }} );
         return r2.ok;
       }
       return false;
@@ -165,6 +165,8 @@
   // --- preview: if only VRM exists (no glb), load VRM for on-page preview
   let previewModel = null;
   let previewIsVRM = false;
+  // placedModel is the object our gestures will manipulate (preview or AR-placed)
+  let placedModel = null;
 
   async function loadPreviewIfNeeded(){
     if (glbExists) {
@@ -185,6 +187,8 @@
         scene.add(obj);
         previewModel = obj;
         previewIsVRM = !!vrm;
+        // set placedModel to preview initially so gestures affect preview model
+        placedModel = obj;
         setStatus('preview VRM loaded');
         // start a simple animation loop for preview
         animatePreview();
@@ -272,8 +276,10 @@
       // scale down if model too large
       obj.scale.multiplyScalar(0.1);
       scene.add(obj);
+      // set as placedModel so gestures will affect this placed AR object when possible
+      placedModel = obj;
       reticle.visible = false;
-      log('model placed into AR scene');
+      log('model placed into AR scene (placedModel set)');
     } catch(e){
       setError('Model load/place failed: ' + e);
     }
@@ -352,6 +358,24 @@
   // if glb does not exist, prepare VRM on-page preview early so user sees model before AR
   if (!glbExists && vrmExists) {
     await loadPreviewIfNeeded();
+  }
+
+  // --- HERE: initialize enhancements AFTER renderer and preview/placedModel may be prepared ---
+  // we dynamically import the enhancements module and wire it up with our renderer and placedModel accessor
+  try {
+    const enhModule = await import('./js/webar-enhancements.js');
+    // initEnhancements expects getPlacedObject() function that returns current placedModel
+    enhModule.initEnhancements({
+      renderer: renderer,
+      camera: camera,
+      getPlacedObject: () => placedModel,
+      modelViewerEl: mv,
+      uiRoot: document.body
+    });
+    log('webar-enhancements initialized');
+  } catch (e) {
+    console.warn('Failed to load enhancements:', e);
+    log('webar-enhancements failed to load: ' + e);
   }
 
   // resize handling
