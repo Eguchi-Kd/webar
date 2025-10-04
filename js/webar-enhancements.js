@@ -1,13 +1,14 @@
 // js/webar-enhancements.js
 // Provides UI toggle + Screenshot + Pinch scale + Swipe rotate for Three.Object3D placed in the scene.
-// Usage: initEnhancements({ renderer, camera, getPlacedObject, modelViewerEl, uiRoot })
+// Usage: initEnhancements({ renderer, camera, getPlacedObject, modelViewerEl, uiRoot, coreUiElements })
 
 export function initEnhancements({
   renderer = null,
   camera = null,
   getPlacedObject = null,
   modelViewerEl = null,
-  uiRoot = document.body
+  uiRoot = document.body,
+  coreUiElements = {}
 } = {}) {
   // --- small helpers ---
   function createEl(tag, cls, html) {
@@ -54,15 +55,31 @@ export function initEnhancements({
     setTimeout(()=>{ try { d.remove(); } catch(e){} }, 8000);
   }
 
+  // helper to toggle core UI elements passed by integrator
+  const corePanel = coreUiElements.panel || null;
+  const coreLog = coreUiElements.log || null;
+  const coreButtons = Array.isArray(coreUiElements.autoButtons) ? coreUiElements.autoButtons.slice() : [];
+
   btnToggle.addEventListener('click', () => {
+    // keep the toggle button itself visible — hide other hidable UI
     document.documentElement.classList.toggle('ui-hidden');
+    // additionally toggle core UI if provided
+    if (corePanel) corePanel.classList.toggle('hidden-by-enh');
+    if (coreLog) coreLog.classList.toggle('hidden-by-enh');
+    coreButtons.forEach(b => { if (b) b.classList.toggle('hidden-by-enh'); });
+    // also hide our own top log when toggled
+    topLog.classList.toggle('hidden-by-enh');
     logTop('UI トグル');
   });
 
   // --- Screenshot implementation ---
   async function screenshotFromRenderer() {
     if (!renderer) throw new Error('renderer not provided');
+    // hide UI briefly
     document.documentElement.classList.add('ui-hidden');
+    if (corePanel) corePanel.classList.add('hidden-by-enh');
+    if (coreLog) coreLog.classList.add('hidden-by-enh');
+    topLog.classList.add('hidden-by-enh');
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
     const canvas = renderer.domElement;
@@ -80,6 +97,9 @@ export function initEnhancements({
       blob = new Blob([u8], { type: mime });
     }
     document.documentElement.classList.remove('ui-hidden');
+    if (corePanel) corePanel.classList.remove('hidden-by-enh');
+    if (coreLog) coreLog.classList.remove('hidden-by-enh');
+    topLog.classList.remove('hidden-by-enh');
     return blob;
   }
 
@@ -135,31 +155,59 @@ export function initEnhancements({
   if (!getPlacedObject || typeof getPlacedObject !== 'function') {
     logTop('ジェスチャー: getPlacedObject 関数が未提供。スワイプ/ピンチは無効。');
   } else {
+    // ensure renderer dom element is prioritized and touchAction disabled
+    if (renderer && renderer.domElement) {
+      try {
+        renderer.domElement.style.touchAction = 'none';
+        renderer.domElement.style.userSelect = 'none';
+      } catch (e) {}
+    }
     const el = renderer && renderer.domElement ? renderer.domElement : (modelViewerEl || document.body);
     const pointers = new Map();
     let gestureState = { mode: 'none', startX:0, startY:0, startDist:0, startScale:1, startRotationY:0 };
 
     function getDistance(p1,p2){ const dx=p2.x-p1.x, dy=p2.y-p1.y; return Math.hypot(dx,dy); }
 
+    function trySetPointerCapture(target, id) {
+      try {
+        if (target && typeof target.setPointerCapture === 'function') {
+          target.setPointerCapture(id);
+          return true;
+        }
+      } catch(e){}
+      return false;
+    }
+
     function onPointerDown(e){
+      // only left mouse button
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      try{ e.target.setPointerCapture(e.pointerId); }catch(e){}
+      // prefer setting capture on el (renderer.domElement) to ensure we get move/up
+      trySetPointerCapture(el, e.pointerId);
+      // also try event target
+      try { if (e.target && typeof e.target.setPointerCapture === 'function') e.target.setPointerCapture(e.pointerId); } catch(e){}
       pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
       const placed = getPlacedObject();
-      if (!placed) return;
+      if (!placed) {
+        // nothing to manipulate
+        return;
+      }
       if (pointers.size === 1) {
         gestureState.mode = 'rotate';
         const p = pointers.values().next().value;
         gestureState.startX = p.x; gestureState.startY = p.y;
-        gestureState.startRotationY = placed.rotation ? placed.rotation.y : 0;
+        // store initial rotation (Y axis)
+        gestureState.startRotationY = (placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
       } else if (pointers.size === 2) {
         gestureState.mode = 'pinch';
         const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
         gestureState.startDist = getDistance(pA,pB);
         const placed = getPlacedObject();
         gestureState.startScale = placed && placed.scale ? placed.scale.x : 1;
+      } else {
+        gestureState.mode = 'none';
       }
     }
+
     function onPointerMove(e){
       if (!pointers.has(e.pointerId)) return;
       pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType });
@@ -168,21 +216,39 @@ export function initEnhancements({
       if (gestureState.mode === 'rotate' && pointers.size === 1) {
         const p = pointers.values().next().value;
         const dx = p.x - gestureState.startX;
-        const ROT_SPEED = 0.01;
+        const ROT_SPEED = 0.008; // tuned sensitivity
         const newY = gestureState.startRotationY - dx * ROT_SPEED;
-        if (placed.rotation) placed.rotation.y = newY;
+        // if model uses quaternion, set rotation via euler
+        if (placed.rotation) {
+          placed.rotation.y = newY;
+        } else if (placed.quaternion) {
+          const e = new THREE.Euler(0, newY, 0);
+          placed.quaternion.setFromEuler(e);
+        }
       } else if (gestureState.mode === 'pinch' && pointers.size === 2) {
         const it = pointers.values(); const pA = it.next().value; const pB = it.next().value;
         const curDist = getDistance(pA,pB);
         if (gestureState.startDist > 0) {
           const ratio = curDist / gestureState.startDist;
           const newScale = Math.max(0.05, Math.min(8, gestureState.startScale * ratio));
-          if (placed.scale) placed.scale.setScalar(newScale);
+          if (placed.scale) {
+            placed.scale.setScalar(newScale);
+          } else {
+            // if no scale, try wrapping object in a parent or set scale on children
+            // fallback: attempt to set scale on children uniformly
+            try {
+              placed.traverse((c) => { if (c.isMesh) c.scale.setScalar(newScale); });
+            } catch (err) {}
+          }
         }
       }
     }
+
     function onPointerUp(e){
-      try{ e.target.releasePointerCapture(e.pointerId); }catch(e){}
+      try {
+        if (el && typeof el.releasePointerCapture === 'function') el.releasePointerCapture(e.pointerId);
+      } catch(e){}
+      try { if (e.target && typeof e.target.releasePointerCapture === 'function') e.target.releasePointerCapture(e.pointerId); } catch(e){}
       pointers.delete(e.pointerId);
       if (pointers.size === 0) gestureState.mode = 'none';
       else if (pointers.size === 1) {
@@ -190,7 +256,7 @@ export function initEnhancements({
         gestureState.mode = 'rotate';
         gestureState.startX = p.x; gestureState.startY = p.y;
         const placed = getPlacedObject();
-        gestureState.startRotationY = placed && placed.rotation ? placed.rotation.y : 0;
+        gestureState.startRotationY = (placed && placed.rotation && typeof placed.rotation.y === 'number') ? placed.rotation.y : (placed && placed.quaternion ? (new THREE.Euler().setFromQuaternion(placed.quaternion)).y : 0);
       }
     }
 
@@ -198,7 +264,8 @@ export function initEnhancements({
     el.addEventListener('pointermove', onPointerMove, { passive:false });
     el.addEventListener('pointerup', onPointerUp, { passive:false });
     el.addEventListener('pointercancel', onPointerUp, { passive:false });
-    el.addEventListener('touchstart', (ev)=>{}, { passive:false });
+    // prevent page scroll while interacting on touch
+    el.addEventListener('touchstart', (ev)=>{ /* no-op - prevents passive scrolling if passive:false */ }, { passive:false });
 
     logTop('ジェスチャー: 有効 (ピンチで拡大/縮小、単指で回転)');
   }
