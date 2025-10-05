@@ -1,11 +1,12 @@
 // js/webar-enhancements.js
 // Provides UI toggle + Screenshot + Pinch scale + Swipe rotate + Pose change.
-// Usage: const enh = await initEnhancements({...}); enh.setXRSession(session);
+// Enhanced: robust pose loading + humanoid bone lookup (three-vrm) + improved name matching.
 
 export async function initEnhancements({
   renderer = null,
   camera = null,
   getPlacedObject = null,
+  getVrmInstance = null,       // optional function -> returns currently loaded VRM instance (if any)
   modelViewerEl = null,
   uiRoot = document.body,
   overlayRoot = null,
@@ -146,14 +147,21 @@ export async function initEnhancements({
     }
   });
 
-  // --- Pose loading & application ---
+  // --- Pose loading & application (robust) ---
   const POSE_COUNT = 5;
-  let poses = []; // array of { version, pose: {...} }
-  let poseIndex = 0;
+  let poses = []; // array of parsed pose JSON (or null)
+  let poseIndex = -1;
 
+  // fetch candidates with base resolution (prioritize ./assets/)
   async function fetchPoseFile(n) {
-    // try assets/poseN.json then ./poseN.json
-    const candidates = [`./assets/pose${n}.json`, `./pose${n}.json`, `./pose${n}.json`];
+    const base = (location.pathname || '/').replace(/\/[^\/]*$/, '/');
+    const origin = location.origin;
+    const candidates = [
+      `${origin}${base}assets/pose${n}.json`,
+      `${origin}${base}pose${n}.json`,
+      `./assets/pose${n}.json`,
+      `./pose${n}.json`
+    ];
     for (const url of candidates) {
       try {
         const r = await fetch(url);
@@ -162,7 +170,9 @@ export async function initEnhancements({
           logTop(`Loaded pose ${n} from ${url}`);
           return json;
         }
-      } catch(e){}
+      } catch (e) {
+        // ignore and try next
+      }
     }
     return null;
   }
@@ -181,29 +191,52 @@ export async function initEnhancements({
     logTop(`Poses loaded: ${poses.filter(x=>x).length}/${POSE_COUNT}`);
   }
 
-  // find node by key (search node.name includes key, case-insensitive)
-  function findNodeByKey(root, key) {
+  // Robust node finder (tries vrm humanoid first then name heuristics)
+  function findNodeByKey(root, key, vrmInstance = null) {
+    // 1) Try VRM humanoid mapping if available
+    try {
+      if (vrmInstance && vrmInstance.humanoid && typeof vrmInstance.humanoid.getBoneNode === 'function') {
+        // Attempt a few name variants
+        const variants = [
+          key,
+          key.toLowerCase(),
+          key.charAt(0).toUpperCase() + key.slice(1),
+          key.replace(/_/g,''),
+          key.replace(/_/g,' ').toLowerCase(),
+          key.replace(/([A-Z])/g,'_$1').toLowerCase() // camelCase -> snake variants
+        ];
+        for (const v of variants) {
+          try {
+            const node = vrmInstance.humanoid.getBoneNode(v);
+            if (node) return node;
+          } catch (e) {
+            // ignore; some vrm implementations throw when not found
+          }
+        }
+      }
+    } catch(e){ /* ignore */ }
+
+    // 2) Fallback: traverse and match by name heuristics
     let found = null;
+    const lcKey = key.toLowerCase();
     root.traverse((node) => {
       if (found) return;
       if (!node.name) return;
       const name = node.name.toLowerCase();
-      if (name.indexOf(key.toLowerCase()) !== -1) {
-        found = node;
-      } else {
-        // some nodes may include ":" or "_" segments, test segments
-        const simple = name.replace(/[:_]/g,' ');
-        if (simple.indexOf(key.toLowerCase()) !== -1) found = node;
-      }
+      if (name.includes(lcKey)) { found = node; return; }
+      const alt = name.replace(/[:_\-]/g,' ');
+      if (alt.includes(lcKey)) { found = node; return; }
+      if (name.replace(/\s+/g,'').includes(lcKey)) { found = node; return; }
     });
     return found;
   }
 
-  // apply pose (quaternions) object to placed object
-  function applyPoseToObject(rootObj, poseObj) {
+  // apply pose (quaternions) object to placed object. Uses vrmInstance if available.
+  function applyPoseToObject(rootObj, poseObj, vrmInstance = null) {
     if (!rootObj || !poseObj) return { ok:false, msg:'no root or pose' };
     const missing = [];
     const applied = [];
+
     for (const key of Object.keys(poseObj)) {
       const data = poseObj[key];
       if (!data || !Array.isArray(data.rotation) || data.rotation.length < 4) {
@@ -211,31 +244,42 @@ export async function initEnhancements({
         continue;
       }
       const qarr = data.rotation;
-      const targetNode = findNodeByKey(rootObj, key);
+      // try to find node by key
+      const targetNode = findNodeByKey(rootObj, key, vrmInstance);
       if (!targetNode) {
         missing.push(key);
         continue;
       }
       const q = new THREE.Quaternion(qarr[0], qarr[1], qarr[2], qarr[3]);
-      // apply quaternion
       try {
+        // apply quaternion as local rotation
         targetNode.quaternion.copy(q);
+        // ensure matrices update
+        try { targetNode.updateMatrix(); targetNode.updateMatrixWorld(true); } catch(e){}
         applied.push(key);
       } catch(e){
         console.warn('applyPose error for', key, e);
         missing.push(key);
       }
     }
-    return { ok: true, applied, missing };
+
+    // If missing, also emit sample node names to help mapping if many missing
+    if (missing.length > 0) {
+      const names = [];
+      let count = 0;
+      rootObj.traverse(n => { if (n.name && count < 200) { names.push(n.name); count++; } });
+      console.warn('pose missing keys:', missing, 'sample available node names:', names.slice(0,80));
+    }
+
+    return { ok:true, applied, missing };
   }
 
-  // apply next pose in loop
+  // apply next pose cyclically
   function applyNextPose(){
     if (!poses || poses.length === 0) {
       logTop('No poses loaded');
       return;
     }
-    // cycle index
     poseIndex = (poseIndex + 1) % poses.length;
     const p = poses[poseIndex];
     if (!p || !p.pose) {
@@ -243,11 +287,12 @@ export async function initEnhancements({
       return;
     }
     const target = (getPlacedObject && typeof getPlacedObject === 'function') ? getPlacedObject() : null;
+    const vrmInst = (getVrmInstance && typeof getVrmInstance === 'function') ? getVrmInstance() : null;
     if (!target) {
       logTop('No placed object to apply pose to');
       return;
     }
-    const result = applyPoseToObject(target, p.pose);
+    const result = applyPoseToObject(target, p.pose, vrmInst);
     logTop(`ポーズ ${poseIndex+1} を適用 — applied ${result.applied.length}, missing ${result.missing.length}`);
     if (result.missing && result.missing.length > 0) {
       console.warn('pose missing keys:', result.missing);
@@ -259,13 +304,11 @@ export async function initEnhancements({
     applyNextPose();
   });
 
-  // preload poses (fire-and-forget)
+  // preload poses
   preloadPoses().catch(e => { console.warn('pose preload failed', e); });
 
-  // ==== Gesture handling (existing from prior version) ====
-  // choose event target: prefer canvas so events reach it even when overlayRoot is pointer-events:none
+  // ==== Gesture handling (existing) ====
   const eventTargetInitial = (renderer && renderer.domElement) ? renderer.domElement : (overlayRoot || modelViewerEl || document.body);
-  // we'll allow dynamic switching via setXRSession
   let currentTarget = null;
   let listenersAttached = false;
   const pointers = new Map();
@@ -348,7 +391,6 @@ export async function initEnhancements({
 
   function addListenersTo(target){
     if (!target) return;
-    // remove previous first
     if (currentTarget) removeListenersFrom(currentTarget);
     currentTarget = target;
     try { target.style.touchAction = 'none'; } catch(e){}
@@ -387,7 +429,6 @@ export async function initEnhancements({
   // API to switch binding when XR session starts/ends
   function setXRSession(session) {
     if (session) {
-      // XR active: attach to overlayRoot if available (DOM overlay receives touch events in XR)
       if (currentTarget) removeListenersFrom(currentTarget);
       if (overlayRoot) {
         try { overlayRoot.style.pointerEvents = 'auto'; } catch(e){}
@@ -399,7 +440,6 @@ export async function initEnhancements({
       }
       logTop('XR session active: gestures bound to overlay/document');
     } else {
-      // XR ended: return to canvas binding and set overlay to pass-through
       if (currentTarget) removeListenersFrom(currentTarget);
       if (overlayRoot) try { overlayRoot.style.pointerEvents = 'none'; } catch(e){}
       if (renderer && renderer.domElement) addListenersTo(renderer.domElement);
@@ -408,11 +448,12 @@ export async function initEnhancements({
     }
   }
 
-  // return public API
+  // expose public API
   return {
     uiRoot: root,
     btnToggle,
     btnScreenshot,
+    btnPose,
     logTop,
     setXRSession,
     destroy(){
